@@ -29,7 +29,7 @@ final class Library {
     static class Item {
         String id = "", name = "", file = "", tags = "", album = "", path = "";
         long added, trashedAt;
-        boolean trashed;
+        boolean trashed, fav;
     }
 
     // Один файл может лежать в нескольких альбомах: item.album хранит id через запятую
@@ -60,14 +60,18 @@ final class Library {
         return sb.toString();
     }
 
+    static final String FAV = "__fav__";   // виртуальный альбом «Избранное»
+
     static class Album {
         String id = "", name = "";
         long created;
+        final ArrayList<String> order = new ArrayList<>();   // ручной порядок файлов в альбоме
     }
 
     static class Meta {
         String name = "", tags = "", album = "";
         long added;
+        boolean fav;
     }
 
     static class Parsed {
@@ -206,6 +210,8 @@ final class Library {
                     a.id = j.optString("id", newId());
                     a.name = j.optString("name", "Album");
                     a.created = j.optLong("created", 0);
+                    JSONArray oa = j.optJSONArray("order");
+                    if (oa != null) for (int k = 0; k < oa.length(); k++) a.order.add(oa.optString(k));
                     albums.add(a);
                 }
             }
@@ -226,6 +232,7 @@ final class Library {
                     it.added = j.optLong("added", ff.lastModified());
                     it.trashed = j.optBoolean("trashed", false);
                     it.trashedAt = j.optLong("trashedAt", 0);
+                    it.fav = j.optBoolean("fav", false);
                     bind(it);
                     items.add(it);
                 }
@@ -291,6 +298,9 @@ final class Library {
                 j.put("id", a.id);
                 j.put("name", a.name);
                 j.put("created", a.created);
+                JSONArray oa = new JSONArray();
+                for (String x : a.order) oa.put(x);
+                j.put("order", oa);
                 al.put(j);
             }
             o.put("albums", al);
@@ -305,6 +315,7 @@ final class Library {
                 j.put("added", it.added);
                 j.put("trashed", it.trashed);
                 j.put("trashedAt", it.trashedAt);
+                j.put("fav", it.fav);
                 ia.put(j);
             }
             o.put("items", ia);
@@ -364,8 +375,21 @@ final class Library {
 
     synchronized ArrayList<Item> inAlbum(String albumId) {
         ArrayList<Item> out = new ArrayList<>();
+        if (FAV.equals(albumId)) {
+            for (Item it : items) if (!it.trashed && it.fav) out.add(it);
+            Collections.sort(out, (x, y) -> Long.compare(y.added, x.added));
+            return out;
+        }
         for (Item it : items) if (!it.trashed && inAlb(it, albumId)) out.add(it);
-        Collections.sort(out, (x, y) -> Long.compare(x.added, y.added));
+        final Album al = albumById(albumId);
+        final List<String> ord = al == null ? new ArrayList<String>() : al.order;
+        Collections.sort(out, (x, y) -> {
+            int ix = ord.indexOf(x.id), iy = ord.indexOf(y.id);
+            if (ix >= 0 && iy >= 0) return Integer.compare(ix, iy);
+            if (ix >= 0) return -1;
+            if (iy >= 0) return 1;
+            return Long.compare(x.added, y.added);
+        });
         return out;
     }
 
@@ -420,6 +444,52 @@ final class Library {
         return it.path;
     }
 
+    static String sha256(File f) {
+        try (InputStream in = new FileInputStream(f)) {
+            java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
+            byte[] b = new byte[65536];
+            int n;
+            while ((n = in.read(b)) > 0) md.update(b, 0, n);
+            StringBuilder sb = new StringBuilder();
+            for (byte x : md.digest()) sb.append(String.format("%02x", x));
+            return sb.toString();
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** Группы одинаковых файлов (по размеру, затем по SHA-256). Вызывать не в UI-потоке. */
+    ArrayList<ArrayList<Item>> findDuplicates() {
+        ArrayList<Item> snap;
+        synchronized (this) { snap = active(); }
+        HashMap<Long, ArrayList<Item>> bySize = new HashMap<>();
+        for (Item it : snap) {
+            long len = new File(it.path).length();
+            if (len <= 0) continue;
+            ArrayList<Item> l = bySize.get(len);
+            if (l == null) { l = new ArrayList<>(); bySize.put(len, l); }
+            l.add(it);
+        }
+        ArrayList<ArrayList<Item>> out = new ArrayList<>();
+        for (ArrayList<Item> same : bySize.values()) {
+            if (same.size() < 2) continue;
+            HashMap<String, ArrayList<Item>> byHash = new HashMap<>();
+            for (Item it : same) {
+                String h = sha256(new File(it.path));
+                if (h == null) continue;
+                ArrayList<Item> l = byHash.get(h);
+                if (l == null) { l = new ArrayList<>(); byHash.put(h, l); }
+                l.add(it);
+            }
+            for (ArrayList<Item> g : byHash.values()) {
+                if (g.size() < 2) continue;
+                Collections.sort(g, (x, y) -> Long.compare(x.added, y.added));
+                out.add(g);
+            }
+        }
+        return out;
+    }
+
     synchronized int trashCount() {
         int n = 0;
         for (Item it : items) if (it.trashed) n++;
@@ -457,6 +527,7 @@ final class Library {
             j.put("tags", it.tags);
             j.put("album", it.album);
             j.put("added", it.added);
+            j.put("fav", it.fav);
             ia.put(j);
         }
         o.put("items", ia);
@@ -484,6 +555,7 @@ final class Library {
                     m.tags = j.optString("tags", "");
                     m.album = j.optString("album", "");
                     m.added = j.optLong("added", 0);
+                    m.fav = j.optBoolean("fav", false);
                     p.byEntry.put(j.optString("file", ""), m);
                 }
             }

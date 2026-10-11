@@ -26,11 +26,13 @@ import android.graphics.pdf.PdfRenderer;
 import android.media.MediaMetadataRetriever;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.StatFs;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.ParcelFileDescriptor;
 import android.provider.OpenableColumns;
 import android.text.InputType;
+import android.transition.TransitionManager;
 import android.text.TextUtils;
 import android.util.LruCache;
 import android.view.GestureDetector;
@@ -164,6 +166,15 @@ public class MainActivity extends Activity {
         }
     }
 
+    /** ScrollView с ограничением высоты (для списка тегов в просмотре). */
+    static class MaxHScroll extends ScrollView {
+        final int maxH;
+        MaxHScroll(Context c, int maxH) { super(c); this.maxH = maxH; }
+        @Override protected void onMeasure(int w, int h) {
+            super.onMeasure(w, MeasureSpec.makeMeasureSpec(maxH, MeasureSpec.AT_MOST));
+        }
+    }
+
     // ---------- Темы ----------
     private static final String[] TH_KEY = {"system", "dark", "light", "teal", "orange", "rose", "green", "navy", "black", "lrose", "lteal", "lorange", "lblue"};
     private static final int[] TH_BG = {0, 0xFF18191D, 0xFFF4F5F8, 0xFF0F1B1E, 0xFF1C1713, 0xFF1D1318, 0xFF121B14, 0xFF0E1A33, 0xFF0A0A0A, 0xFFFBF1F4, 0xFFEFF8F6, 0xFFFAF4EC, 0xFFEFF4FC};
@@ -183,7 +194,7 @@ public class MainActivity extends Activity {
     private static long leftAt = 0;
     private boolean skipLock = false;
 
-    private static final int PICK_MEDIA = 101, PICK_ZIP = 102, PICK_PDF = 103, EXPORT_ZIP = 104;
+    private static final int PICK_MEDIA = 101, PICK_ZIP = 102, PICK_PDF = 103, EXPORT_ZIP = 104, PICK_BG = 105;
 
     private final ArrayList<Dialog> openDialogs = new ArrayList<>();
     private final ExecutorService pool = Executors.newFixedThreadPool(3);
@@ -203,6 +214,12 @@ public class MainActivity extends Activity {
 
     private String albumOpen = null;
     private final LinkedHashSet<String> sel = new LinkedHashSet<>();
+    private final LinkedHashSet<String> feedSel = new LinkedHashSet<>();
+    private boolean favOnly = false;
+    private LinearLayout feedHead, feedSelBar;
+    private TextView feedSelCount;
+    private ImageView bgView;
+    private View bgDim;
     private FrameLayout lockView;
     private final LinkedHashSet<String> incTags = new LinkedHashSet<>(), excTags = new LinkedHashSet<>();
     private boolean matchAll = true, newestFirst = true;
@@ -226,14 +243,73 @@ public class MainActivity extends Activity {
         cols = Math.max(1, Math.min(4, prefs.getInt("cols", 2)));
         showNames = prefs.getBoolean("names", true);
         applyTheme();
-        lib = new Library(getFilesDir());
-        lib.load(getSharedPreferences("library", 0).getString("items", null));
+        lib = openLib();
+        applySecure();
         if (b != null) {
             startTab = b.getInt("tab", -1);
             albumOpen = b.getString("album", null);
+        } else {
+            Intent in0 = getIntent();
+            String act0 = in0 == null ? null : in0.getAction();
+            if ("com.example.offlinemediavault.UPLOAD".equals(act0)) { startTab = 2; pendingPick = true; }
+            else if ("com.example.offlinemediavault.FAVORITES".equals(act0)) { startTab = 1; albumOpen = Library.FAV; }
         }
         buildAll();
         if (hasPin() && !authed) showLock();
+        else if (pendingPick) { pendingPick = false; ui.post(this::pickMedia); }
+    }
+
+    private boolean pendingPick = false;
+    private static boolean decoy = false;   // открыт «ложный» (пустой) архив по запасному PIN
+
+    private Library openLib() {
+        if (decoy) {
+            File dd = new File(getFilesDir(), "decoy");
+            dd.mkdirs();
+            Library l = new Library(dd);
+            l.load(null);
+            return l;
+        }
+        Library l = new Library(getFilesDir());
+        l.load(getSharedPreferences("library", 0).getString("items", null));
+        return l;
+    }
+
+    private void switchVault(boolean fake) {
+        if (fake == decoy) return;
+        decoy = fake;
+        lib = openLib();
+        thumbCache.evictAll();
+        sel.clear(); feedSel.clear(); albumSelA.clear(); albumSelI.clear();
+        incTags.clear(); excTags.clear();
+        favOnly = false;
+        albumOpen = null;
+        refreshAll();
+    }
+
+    // Запрет скриншотов и скрытие содержимого в списке недавних
+    private void setSecure(boolean on) {
+        Window w = getWindow();
+        if (w != null) { if (on) w.addFlags(WindowManager.LayoutParams.FLAG_SECURE); else w.clearFlags(WindowManager.LayoutParams.FLAG_SECURE); }
+        for (Dialog d : new ArrayList<>(openDialogs)) {
+            try {
+                Window dw = d.getWindow();
+                if (dw == null) continue;
+                if (on) dw.addFlags(WindowManager.LayoutParams.FLAG_SECURE); else dw.clearFlags(WindowManager.LayoutParams.FLAG_SECURE);
+            } catch (Exception ignored) { }
+        }
+    }
+
+    private void applySecure() { setSecure(prefs.getBoolean("no_shots", false)); }
+
+    @Override protected void onPause() {
+        super.onPause();
+        if (prefs != null && prefs.getBoolean("hide_recents", false)) setSecure(true);
+    }
+
+    @Override protected void onResume() {
+        super.onResume();
+        if (prefs != null) applySecure();
     }
 
     @Override protected void onSaveInstanceState(Bundle out) {
@@ -260,6 +336,7 @@ public class MainActivity extends Activity {
 
     @Override public void onBackPressed() {
         if (lockView != null && lockView.getVisibility() == View.VISIBLE) { moveTaskToBack(true); return; }
+        if (curTab == 0 && !feedSel.isEmpty()) { feedSel.clear(); renderFeed(); return; }
         if (!sel.isEmpty()) { sel.clear(); renderUpload(); return; }
         if (curTab == 1 && (!albumSelA.isEmpty() || !albumSelI.isEmpty())) { albumSelCancel(); return; }
         if (curTab == 1 && albumOpen != null) { albumOpen = null; animGrid = true; renderAlbums(); return; }
@@ -395,7 +472,112 @@ public class MainActivity extends Activity {
 
     private void animWin(Dialog d, int style) {
         Window w = d.getWindow();
-        if (w != null) w.setWindowAnimations(style);
+        if (w == null) return;
+        w.setWindowAnimations(style);
+        if (prefs.getBoolean("no_shots", false)) w.addFlags(WindowManager.LayoutParams.FLAG_SECURE);
+    }
+
+    // Применяет эффект нажатия ко всем кликабельным видам внутри
+    private void fxTree(View v) {
+        if (v == null) return;
+        if (v.hasOnClickListeners()) pressFx(v);
+        if (v instanceof ViewGroup) {
+            ViewGroup g = (ViewGroup) v;
+            for (int i = 0; i < g.getChildCount(); i++) fxTree(g.getChildAt(i));
+        }
+    }
+
+    /** Пункт нижнего меню. */
+    static class Act {
+        final String icon, label, desc;
+        final int color;   // 0 = акцентный
+        final Runnable run;
+        Act(String icon, String label, String desc, int color, Runnable run) {
+            this.icon = icon; this.label = label; this.desc = desc; this.color = color; this.run = run;
+        }
+    }
+
+    // Красивое нижнее меню со скруглёнными карточками
+    private void sheet(String title, String sub, final Act... acts) {
+        final Dialog d = new Dialog(this, android.R.style.Theme_Material_Dialog_NoActionBar);
+        LinearLayout sh = new LinearLayout(this);
+        sh.setOrientation(LinearLayout.VERTICAL);
+        GradientDrawable sbg = new GradientDrawable();
+        sbg.setColor(BG);
+        float rr = dp(28);
+        sbg.setCornerRadii(new float[]{rr, rr, rr, rr, 0, 0, 0, 0});
+        sh.setBackground(sbg);
+        sh.setPadding(dp(16), dp(10), dp(16), dp(14));
+        sh.setOnApplyWindowInsetsListener((v, insets) -> {
+            v.setPadding(dp(16), dp(10), dp(16), dp(14) + insets.getSystemWindowInsetBottom());
+            return insets;
+        });
+        View handle = new View(this);
+        handle.setBackground(round(blend(BG, FG, 0.25f), 3));
+        LinearLayout.LayoutParams hp = new LinearLayout.LayoutParams(dp(40), dp(5));
+        hp.gravity = Gravity.CENTER_HORIZONTAL;
+        hp.bottomMargin = dp(12);
+        sh.addView(handle, hp);
+        TextView ttl = tv(title, 19, FG, true);
+        ttl.setMaxLines(2);
+        ttl.setEllipsize(TextUtils.TruncateAt.END);
+        sh.addView(ttl, new LinearLayout.LayoutParams(-1, -2));
+        if (sub != null && !sub.isEmpty()) {
+            TextView st = tv(sub, 13, MUTED, false);
+            st.setPadding(0, dp(4), 0, 0);
+            sh.addView(st, new LinearLayout.LayoutParams(-1, -2));
+        }
+        ScrollView sv = new ScrollView(this);
+        LinearLayout list = new LinearLayout(this);
+        list.setOrientation(LinearLayout.VERTICAL);
+        list.setPadding(0, dp(6), 0, 0);
+        sv.addView(list);
+        for (final Act a : acts) {
+            int col = a.color == 0 ? ACCENT : a.color;
+            LinearLayout row = new LinearLayout(this);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setPadding(dp(12), dp(11), dp(12), dp(11));
+            row.setBackground(round(a.color == 0 ? PANEL : blend(PANEL, a.color, 0.16f), 18));
+            TextView ic = tv(a.icon, 17, 0xFFFFFFFF, true);
+            ic.setGravity(Gravity.CENTER);
+            GradientDrawable og = new GradientDrawable();
+            og.setShape(GradientDrawable.OVAL);
+            og.setColor(col);
+            ic.setBackground(og);
+            row.addView(ic, new LinearLayout.LayoutParams(dp(40), dp(40)));
+            LinearLayout tx = new LinearLayout(this);
+            tx.setOrientation(LinearLayout.VERTICAL);
+            tx.setPadding(dp(12), 0, dp(4), 0);
+            TextView lb = tv(a.label, 15, a.color == RED ? RED : FG, true);
+            lb.setMaxLines(2);
+            lb.setEllipsize(TextUtils.TruncateAt.END);
+            tx.addView(lb);
+            if (a.desc != null && !a.desc.isEmpty()) tx.addView(tv(a.desc, 12, MUTED, false));
+            row.addView(tx, new LinearLayout.LayoutParams(0, -2, 1));
+            row.setOnClickListener(v -> { d.dismiss(); if (a.run != null) a.run.run(); });
+            LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(-1, -2);
+            rp.topMargin = dp(8);
+            list.addView(row, rp);
+        }
+        sh.addView(sv, new LinearLayout.LayoutParams(-1, -2));
+        TextView cancel = button(t("cancel"));
+        cancel.setBackground(round(BTN, 24));
+        cancel.setOnClickListener(v -> d.dismiss());
+        LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(-1, dp(48));
+        cp.topMargin = dp(12);
+        sh.addView(cancel, cp);
+        fxTree(sh);
+        d.setContentView(sh);
+        Window w = d.getWindow();
+        if (w != null) {
+            w.setBackgroundDrawable(new ColorDrawable(0x00000000));
+            w.setGravity(Gravity.BOTTOM);
+            w.setLayout(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.WRAP_CONTENT);
+        }
+        animWin(d, R.style.OmvSheetAnim);
+        d.setCanceledOnTouchOutside(true);
+        openDialogs.add(d);
+        d.show();
     }
 
     // Иконка приложения: 5 activity-alias, включён ровно один
@@ -470,6 +652,7 @@ public class MainActivity extends Activity {
         AlertDialog d = b.create();
         animWin(d, R.style.OmvPopAnim);
         d.show();
+        if (d.getWindow() != null) fxTree(d.getWindow().getDecorView());
         openDialogs.add(d);
         return d;
     }
@@ -519,16 +702,20 @@ public class MainActivity extends Activity {
         tabViews[3] = buildSettings();
         shell = new LinearLayout(this);
         shell.setOrientation(LinearLayout.VERTICAL);
-        shell.setBackgroundColor(BG);
+        shell.setBackgroundColor(0x00000000);
         shell.setOnApplyWindowInsetsListener((v, insets) -> {
             v.setPadding(insets.getSystemWindowInsetLeft(), insets.getSystemWindowInsetTop(), insets.getSystemWindowInsetRight(), insets.getSystemWindowInsetBottom());
             return insets;
         });
         FrameLayout body = new FrameLayout(this);
-        for (int i = 0; i < 4; i++) { tabViews[i].setVisibility(View.GONE); body.addView(tabViews[i], new FrameLayout.LayoutParams(-1, -1)); }
+        for (int i = 0; i < 4; i++) {
+            tabViews[i].setBackgroundColor(0x00000000);
+            tabViews[i].setVisibility(View.GONE);
+            body.addView(tabViews[i], new FrameLayout.LayoutParams(-1, -1));
+        }
         shell.addView(body, new LinearLayout.LayoutParams(-1, 0, 1));
         LinearLayout bar = new LinearLayout(this);
-        bar.setBackgroundColor(PANEL);
+        bar.setBackgroundColor(bgFile().exists() ? ((PANEL & 0x00FFFFFF) | 0xD0000000) : PANEL);
         String[] names = {t("tab_feed"), t("tab_albums"), t("tab_upload"), t("tab_settings")};
         for (int i = 0; i < 4; i++) {
             final int k = i;
@@ -543,6 +730,12 @@ public class MainActivity extends Activity {
         shell.addView(bar, new LinearLayout.LayoutParams(-1, dp(54)));
         appRoot = new FrameLayout(this);
         appRoot.setBackgroundColor(BG);
+        bgView = new ImageView(this);
+        bgView.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        appRoot.addView(bgView, new FrameLayout.LayoutParams(-1, -1));
+        bgDim = new View(this);
+        appRoot.addView(bgDim, new FrameLayout.LayoutParams(-1, -1));
+        applyBg();
         appRoot.addView(shell, new FrameLayout.LayoutParams(-1, -1));
         buildLock();
         appRoot.addView(lockView, new FrameLayout.LayoutParams(-1, -1));
@@ -571,6 +764,53 @@ public class MainActivity extends Activity {
             v.animate().alpha(1f).translationY(0f).setDuration(260).start();
         }
         if (tab == 0) renderFeed(); else if (tab == 1) renderAlbums(); else if (tab == 2) renderUpload(); else renderSettings();
+    }
+
+    private File bgFile() { return new File(getFilesDir(), "bg.jpg"); }
+
+    private void applyBg() {
+        if (bgView == null) return;
+        final File f = bgFile();
+        if (!f.exists()) {
+            bgView.setImageDrawable(null);
+            bgView.setVisibility(View.GONE);
+            bgDim.setVisibility(View.GONE);
+            return;
+        }
+        int pct = prefs.getInt("bgdim", 55);
+        bgDim.setBackgroundColor((BG & 0x00FFFFFF) | (((int) (pct * 2.55f)) << 24));
+        bgView.setVisibility(View.VISIBLE);
+        bgDim.setVisibility(View.VISIBLE);
+        pool.execute(() -> {
+            final Bitmap b = decodeSampled(f.getAbsolutePath(), 1600);
+            ui.post(() -> { if (b != null && bgView != null) bgView.setImageBitmap(b); });
+        });
+    }
+
+    private void pickBg() {
+        skipLock = true;
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        i.setType("image/*");
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        startActivityForResult(i, PICK_BG);
+    }
+
+    private void setBgFrom(final Uri u) {
+        io.execute(() -> {
+            File raw = new File(getCacheDir(), "bg_raw");
+            boolean ok = false;
+            try (InputStream in = getContentResolver().openInputStream(u); OutputStream os = new FileOutputStream(raw)) {
+                if (in != null) { pump(in, os); ok = true; }
+            } catch (Exception ignored) { }
+            if (ok) {
+                Bitmap b = decodeSampled(raw.getAbsolutePath(), 1600);
+                if (b != null) {
+                    try (OutputStream os = new FileOutputStream(bgFile())) { b.compress(Bitmap.CompressFormat.JPEG, 88, os); } catch (Exception ignored) { }
+                }
+            }
+            raw.delete();
+            ui.post(() -> { toast(t("bg_set")); recreate(); });
+        });
     }
 
     private void refreshAll() { renderFeed(); renderAlbums(); renderUpload(); }
@@ -717,6 +957,17 @@ public class MainActivity extends Activity {
             ckp.setMargins(dp(6), dp(6), 0, 0);
             th.addView(ck, ckp);
         }
+        if (it.fav) {
+            TextView hv = tv("♥", 12, 0xFFFFFFFF, true);
+            hv.setGravity(Gravity.CENTER);
+            GradientDrawable hg = new GradientDrawable();
+            hg.setShape(GradientDrawable.OVAL);
+            hg.setColor(0xCCE8527E);
+            hv.setBackground(hg);
+            FrameLayout.LayoutParams hlp = new FrameLayout.LayoutParams(dp(22), dp(22), Gravity.TOP | Gravity.END);
+            hlp.setMargins(0, dp(6), dp(6), 0);
+            th.addView(hv, hlp);
+        }
         cell.addView(th, new LinearLayout.LayoutParams(cw, thumbH));
         if (showNames) {
             TextView n = tv(it.name, 11, FG, true);
@@ -817,6 +1068,40 @@ public class MainActivity extends Activity {
         filterBtn.setOnClickListener(v -> openFilter());
         head.addView(filterBtn, new LinearLayout.LayoutParams(-2, dp(40)));
         r.addView(head, new LinearLayout.LayoutParams(-1, -2));
+        feedHead = head;
+        feedSelBar = new LinearLayout(this);
+        feedSelBar.setGravity(Gravity.CENTER_VERTICAL);
+        feedSelBar.setPadding(dp(8), dp(12), dp(12), dp(4));
+        TextView fsCancel = tv("✕", 20, FG, true);
+        fsCancel.setGravity(Gravity.CENTER);
+        fsCancel.setOnClickListener(v -> { feedSel.clear(); renderFeed(); });
+        feedSelBar.addView(fsCancel, new LinearLayout.LayoutParams(dp(44), dp(44)));
+        feedSelCount = tv("", 17, FG, true);
+        feedSelCount.setPadding(dp(8), 0, dp(8), 0);
+        feedSelBar.addView(feedSelCount, new LinearLayout.LayoutParams(0, -2, 1));
+        TextView fsAll = button(t("sel_all"));
+        fsAll.setBackground(round(BTN, 20));
+        fsAll.setOnClickListener(v -> { for (Library.Item it : filtered()) feedSel.add(it.id); renderFeed(); });
+        feedSelBar.addView(fsAll, new LinearLayout.LayoutParams(-2, dp(40)));
+        TextView fsFav = tv("♥", 18, 0xFFFFFFFF, true);
+        fsFav.setGravity(Gravity.CENTER);
+        fsFav.setBackground(round(0xFFE8527E, 20));
+        fsFav.setOnClickListener(v -> toggleFav(selectedFeed()));
+        TextView fsAlbum = tv("▣", 18, ONACC, true);
+        fsAlbum.setGravity(Gravity.CENTER);
+        fsAlbum.setBackground(round(ACCENT, 20));
+        fsAlbum.setOnClickListener(v -> chooseAlbum(selectedFeed()));
+        TextView fsDel = tv("🗑", 18, 0xFFFFFFFF, true);
+        fsDel.setGravity(Gravity.CENTER);
+        fsDel.setBackground(round(RED, 20));
+        fsDel.setOnClickListener(v -> feedTrashAsk());
+        for (TextView b : new TextView[]{fsFav, fsAlbum, fsDel}) {
+            LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(dp(48), dp(40));
+            bp.setMarginStart(dp(8));
+            feedSelBar.addView(b, bp);
+        }
+        feedSelBar.setVisibility(View.GONE);
+        r.addView(feedSelBar, new LinearLayout.LayoutParams(-1, -2));
         feedInfo = tv("", 12, MUTED, false);
         feedInfo.setPadding(dp(16), 0, dp(16), dp(8));
         r.addView(feedInfo, new LinearLayout.LayoutParams(-1, -2));
@@ -839,6 +1124,34 @@ public class MainActivity extends Activity {
     }
 
     // Лента: теги (показать только с ними) минус чёрные теги; сортировка по времени загрузки
+    private ArrayList<Library.Item> selectedFeed() {
+        ArrayList<Library.Item> out = new ArrayList<>();
+        for (Library.Item it : lib.active()) if (feedSel.contains(it.id)) out.add(it);
+        return out;
+    }
+
+    private void toggleFav(ArrayList<Library.Item> targets) {
+        if (targets.isEmpty()) return;
+        boolean all = true;
+        for (Library.Item it : targets) if (!it.fav) { all = false; break; }
+        for (Library.Item it : targets) it.fav = !all;
+        lib.save();
+        feedSel.clear(); albumSelI.clear(); sel.clear();
+        refreshAll();
+        toast(tf(all ? "unfav_n" : "fav_n", targets.size()));
+    }
+
+    private void feedTrashAsk() {
+        final ArrayList<Library.Item> targets = selectedFeed();
+        if (targets.isEmpty()) return;
+        sheet(tf("sel_n", targets.size()), t("trash_note"),
+                new Act("🗑", t("del_to_trash"), t("del_to_trash_d"), RED, () -> {
+                    for (Library.Item it : targets) lib.moveToTrash(it);
+                    lib.save(); feedSel.clear(); refreshAll();
+                    toast(tf("moved_trash", targets.size()));
+                }));
+    }
+
     private ArrayList<Library.Item> filtered() {
         ArrayList<Library.Item> out = new ArrayList<>();
         for (Library.Item it : lib.active()) {
@@ -846,6 +1159,7 @@ public class MainActivity extends Activity {
             boolean banned = false;
             for (String x : excTags) if (ts.contains(x)) { banned = true; break; }
             if (banned) continue;
+            if (favOnly && !it.fav) continue;
             boolean ok;
             if (incTags.isEmpty()) ok = true;
             else if (matchAll) ok = ts.containsAll(incTags);
@@ -861,7 +1175,14 @@ public class MainActivity extends Activity {
         TreeMap<String, Integer> counts = allTagCounts();
         incTags.retainAll(counts.keySet());
         excTags.retainAll(counts.keySet());
-        int active = incTags.size() + excTags.size() + (newestFirst ? 0 : 1);
+        HashSet<String> liveIds = new HashSet<>();
+        for (Library.Item it : lib.active()) liveIds.add(it.id);
+        feedSel.retainAll(liveIds);
+        boolean fmode = !feedSel.isEmpty();
+        feedHead.setVisibility(fmode ? View.GONE : View.VISIBLE);
+        fadeVis(feedSelBar, fmode);
+        feedSelCount.setText(tf("sel_n", feedSel.size()));
+        int active = incTags.size() + excTags.size() + (newestFirst ? 0 : 1) + (favOnly ? 1 : 0);
         filterBtn.setText(active > 0 ? t("filter") + " · " + active : t("filter"));
         filterBtn.setTextColor(active > 0 ? ONACC : FG);
         filterBtn.setBackground(round(active > 0 ? ACCENT : BTN, 20));
@@ -877,7 +1198,8 @@ public class MainActivity extends Activity {
             feedGrid.addView(emptyNote(lib.active().isEmpty() ? t("empty_all") : t("empty_filter")), params(-1, -2));
             return;
         }
-        fillGrid(feedGrid, feedScroll, list, null, null);
+        fillGrid(feedGrid, feedScroll, list, feedSel, this::renderFeed);
+        fxTree(feedGrid);
     }
 
     // ---------- Фильтр ленты (нижняя шторка) ----------
@@ -912,7 +1234,7 @@ public class MainActivity extends Activity {
 
     private void openFilter() {
         final LinkedHashSet<String> inc = new LinkedHashSet<>(incTags), exc = new LinkedHashSet<>(excTags);
-        final boolean[] st = {matchAll, newestFirst};
+        final boolean[] st = {matchAll, newestFirst, favOnly};
         final TreeMap<String, Integer> counts = allTagCounts();
         final Dialog d = new Dialog(this, android.R.style.Theme_Material_Dialog_NoActionBar);
 
@@ -1018,6 +1340,10 @@ public class MainActivity extends Activity {
                     addCard(holder, c2);
                 }
             }
+            LinearLayout c5 = card();
+            c5.addView(cardTitle(t("sec_show")));
+            c5.addView(segmented(new String[]{t("show_all"), "♥ " + t("favorites")}, st[2] ? 1 : 0, i -> { st[2] = i == 1; draw[0].run(); }));
+            addCard(holder, c5);
             LinearLayout c3 = card();
             c3.addView(cardTitle(t("sec_match")));
             c3.addView(segmented(new String[]{t("match_all"), t("match_any")}, st[0] ? 0 : 1, i -> { st[0] = i == 0; draw[0].run(); }));
@@ -1036,12 +1362,13 @@ public class MainActivity extends Activity {
         applyB.setOnClickListener(v -> {
             incTags.clear(); incTags.addAll(inc);
             excTags.clear(); excTags.addAll(exc);
-            matchAll = st[0]; newestFirst = st[1];
+            matchAll = st[0]; newestFirst = st[1]; favOnly = st[2];
             animGrid = true;
             renderFeed();
             d.dismiss();
         });
         draw[0].run();
+        fxTree(sheet);
         d.setContentView(sheet);
         Window w = d.getWindow();
         if (w != null) {
@@ -1049,8 +1376,8 @@ public class MainActivity extends Activity {
             w.setGravity(Gravity.BOTTOM);
             w.setLayout(WindowManager.LayoutParams.MATCH_PARENT, (int) (getResources().getDisplayMetrics().heightPixels * 0.88f));
             w.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
-            w.setWindowAnimations(R.style.OmvSheetAnim);
         }
+        animWin(d, R.style.OmvSheetAnim);
         d.setCanceledOnTouchOutside(true);
         openDialogs.add(d);
         d.show();
@@ -1059,7 +1386,7 @@ public class MainActivity extends Activity {
     // ---------- Альбомы ----------
     private LinearLayout albumListBox, albumGrid, albumHead, albumSelBar;
     private ScrollView albumListScroll, albumDetailScroll;
-    private TextView albumTitle, albumBackBtn, albumRenameBtn, albumDelBtn, albumNewBtn, albumSelCount;
+    private TextView albumTitle, albumBackBtn, albumRenameBtn, albumDelBtn, albumNewBtn, albumSelCount, albumSelRename;
     private final LinkedHashSet<String> albumSelA = new LinkedHashSet<>(), albumSelI = new LinkedHashSet<>();
 
     private View buildAlbums() {
@@ -1082,9 +1409,9 @@ public class MainActivity extends Activity {
         albumRenameBtn.setGravity(Gravity.CENTER);
         albumRenameBtn.setOnClickListener(v -> renameAlbum());
         albumHead.addView(albumRenameBtn, new LinearLayout.LayoutParams(dp(44), dp(44)));
-        albumDelBtn = tv("🗑", 20, FG, true);
+        albumDelBtn = tv("⋯", 26, FG, true);
         albumDelBtn.setGravity(Gravity.CENTER);
-        albumDelBtn.setOnClickListener(v -> deleteAlbumAsk());
+        albumDelBtn.setOnClickListener(v -> albumMenu());
         albumHead.addView(albumDelBtn, new LinearLayout.LayoutParams(dp(44), dp(44)));
         albumNewBtn = tv("+ " + t("new_album"), 14, ONACC, true);
         albumNewBtn.setGravity(Gravity.CENTER);
@@ -1106,6 +1433,10 @@ public class MainActivity extends Activity {
         albumSelCount = tv("", 17, FG, true);
         albumSelCount.setPadding(dp(8), 0, dp(8), 0);
         albumSelBar.addView(albumSelCount, new LinearLayout.LayoutParams(0, -2, 1));
+        albumSelRename = tv("✎", 20, FG, true);
+        albumSelRename.setGravity(Gravity.CENTER);
+        albumSelRename.setOnClickListener(v -> { if (albumSelA.size() == 1) renameAlbumById(albumSelA.iterator().next()); });
+        albumSelBar.addView(albumSelRename, new LinearLayout.LayoutParams(dp(44), dp(44)));
         TextView selAll = button(t("sel_all"));
         selAll.setBackground(round(BTN, 20));
         selAll.setOnClickListener(v -> albumSelAll());
@@ -1151,37 +1482,45 @@ public class MainActivity extends Activity {
         renderAlbums();
     }
 
-    // В списке альбомов: удалить выбранные альбомы (с файлами или без). Внутри альбома: выбранные файлы в корзину.
+    // В списке альбомов: удалить выбранные альбомы (с файлами или без). Внутри альбома: действия с выбранными файлами.
     private void albumSelDelete() {
         if (albumOpen != null) {
             final ArrayList<Library.Item> targets = new ArrayList<>();
             for (Library.Item it : lib.inAlbum(albumOpen)) if (albumSelI.contains(it.id)) targets.add(it);
             if (targets.isEmpty()) return;
             final String aid = albumOpen;
-            final String[] opts = {t("rm_from_album"), t("del_from_app"), t("pick_album")};
-            showDlg(dlg().setTitle(tf("sel_n", targets.size())).setItems(opts, (d, which) -> {
-                if (which == 0) {
-                    for (Library.Item it : targets) Library.removeAlb(it, aid);
-                    lib.save(); albumSelI.clear(); refreshAll();
-                    toast(tf("removed_from_album", targets.size()));
-                } else if (which == 1) {
-                    for (Library.Item it : targets) lib.moveToTrash(it);
-                    lib.save(); albumSelI.clear(); refreshAll();
-                    toast(tf("moved_trash", targets.size()));
-                } else chooseAlbum(targets);
-            }).setNegativeButton(t("cancel"), null));
+            final boolean isFav = Library.FAV.equals(aid);
+            boolean allFav = true;
+            for (Library.Item it : targets) if (!it.fav) { allFav = false; break; }
+            ArrayList<Act> acts = new ArrayList<>();
+            acts.add(new Act(isFav ? "♡" : "↗", isFav ? t("rm_from_fav") : t("rm_from_album"), isFav ? t("rm_from_fav_d") : t("rm_from_album_d"), 0, () -> {
+                for (Library.Item it : targets) { if (isFav) it.fav = false; else Library.removeAlb(it, aid); }
+                lib.save(); albumSelI.clear(); refreshAll();
+                toast(tf("removed_from_album", targets.size()));
+            }));
+            if (!isFav) {
+                final boolean af = allFav;
+                acts.add(new Act(af ? "♡" : "♥", af ? t("rm_from_fav") : t("add_to_fav"), null, 0, () -> toggleFav(targets)));
+            }
+            acts.add(new Act("＋", t("pick_album"), t("pick_album_d"), 0, () -> chooseAlbum(targets)));
+            acts.add(new Act("🗑", t("del_from_app"), t("del_from_app_d"), RED, () -> {
+                for (Library.Item it : targets) lib.moveToTrash(it);
+                lib.save(); albumSelI.clear(); refreshAll();
+                toast(tf("moved_trash", targets.size()));
+            }));
+            sheet(tf("sel_n", targets.size()), null, acts.toArray(new Act[0]));
             return;
         }
         final ArrayList<String> ids = new ArrayList<>(albumSelA);
         if (ids.isEmpty()) return;
-        showDlg(dlg().setTitle(tf("album_del_q", ids.size())).setMessage(t("albums_files_note"))
-                .setNegativeButton(t("cancel"), null)
-                .setNeutralButton(t("albums_only"), (d, w) -> deleteAlbums(ids, false))
-                .setPositiveButton(t("albums_files"), (d, w) -> deleteAlbums(ids, true)));
+        sheet(tf("album_del_q", ids.size()), t("albums_files_note"),
+                new Act("▣", t("albums_only"), t("albums_only_d"), 0, () -> deleteAlbums(ids, false)),
+                new Act("🗑", t("albums_files"), t("albums_files_d"), RED, () -> deleteAlbums(ids, true)));
     }
 
     private void deleteAlbums(ArrayList<String> ids, boolean withFiles) {
         int files = 0;
+        if (albumOpen != null && ids.contains(albumOpen)) albumOpen = null;
         for (String id : ids) {
             if (withFiles) for (Library.Item it : lib.inAlbum(id)) { lib.moveToTrash(it); files++; }
             lib.deleteAlbum(id);
@@ -1194,7 +1533,7 @@ public class MainActivity extends Activity {
 
     private void renderAlbums() {
         if (albumListBox == null || !visible(tabViews[1])) return;
-        if (albumOpen != null && lib.albumById(albumOpen) == null) albumOpen = null;
+        if (albumOpen != null && !Library.FAV.equals(albumOpen) && lib.albumById(albumOpen) == null) albumOpen = null;
         HashSet<String> aids = new HashSet<>();
         for (Library.Album a : lib.albums) aids.add(a.id);
         albumSelA.retainAll(aids);
@@ -1209,6 +1548,7 @@ public class MainActivity extends Activity {
         albumHead.setVisibility(selMode ? View.GONE : View.VISIBLE);
         fadeVis(albumSelBar, selMode);
         albumSelCount.setText(tf("sel_n", detail ? albumSelI.size() : albumSelA.size()));
+        albumSelRename.setVisibility(!detail && albumSelA.size() == 1 ? View.VISIBLE : View.GONE);
         int dv = detail ? View.VISIBLE : View.GONE, lv = detail ? View.GONE : View.VISIBLE;
         albumBackBtn.setVisibility(dv);
         albumRenameBtn.setVisibility(dv);
@@ -1217,17 +1557,22 @@ public class MainActivity extends Activity {
         albumDetailScroll.setVisibility(dv);
         albumListScroll.setVisibility(lv);
         if (detail) {
-            Library.Album a = lib.albumById(albumOpen);
-            albumTitle.setText(a.name);
-            ArrayList<Library.Item> list = lib.inAlbum(a.id);
+            boolean isFav = Library.FAV.equals(albumOpen);
+            Library.Album a = isFav ? null : lib.albumById(albumOpen);
+            albumTitle.setText(isFav ? "♥ " + t("favorites") : a.name);
+            albumRenameBtn.setVisibility(isFav ? View.GONE : View.VISIBLE);
+            albumDelBtn.setVisibility(isFav ? View.GONE : View.VISIBLE);
+            ArrayList<Library.Item> list = lib.inAlbum(albumOpen);
             albumGrid.removeAllViews();
-            if (list.isEmpty()) albumGrid.addView(emptyNote(t("album_empty")), params(-1, -2));
+            if (list.isEmpty()) albumGrid.addView(emptyNote(t(isFav ? "fav_empty" : "album_empty")), params(-1, -2));
             else fillGrid(albumGrid, albumDetailScroll, list, albumSelI, this::renderAlbums);
+            fxTree(albumGrid);
             return;
         }
         albumTitle.setText(t("tab_albums").toUpperCase(Locale.ROOT));
         albumListBox.removeAllViews();
-        if (lib.albums.isEmpty()) { albumListBox.addView(emptyNote(t("no_albums")), params(-1, -2)); return; }
+        addFavCard();
+        if (lib.albums.isEmpty()) { albumListBox.addView(emptyNote(t("no_albums")), params(-1, -2)); fxTree(albumListBox); return; }
         for (final Library.Album a : new ArrayList<>(lib.albums)) {
             ArrayList<Library.Item> its = lib.inAlbum(a.id);
             final boolean picked = albumSelA.contains(a.id);
@@ -1266,22 +1611,199 @@ public class MainActivity extends Activity {
             });
             card.setOnLongClickListener(v -> { toggleAlbumSel(a.id); return true; });
         }
+        fxTree(albumListBox);
     }
 
-    private void renameAlbum() {
+    private void addFavCard() {
+        ArrayList<Library.Item> favs = lib.inAlbum(Library.FAV);
+        LinearLayout card = new LinearLayout(this);
+        card.setGravity(Gravity.CENTER_VERTICAL);
+        card.setPadding(dp(10), dp(9), dp(12), dp(9));
+        card.setBackground(round(blend(PANEL, 0xFFE8527E, 0.16f), 14));
+        LinearLayout.LayoutParams cp = params(-1, -2);
+        cp.bottomMargin = dp(8);
+        albumListBox.addView(card, cp);
+        View cover;
+        if (favs.isEmpty()) {
+            TextView ph = tv("♥", 28, 0xFFE8527E, false);
+            ph.setGravity(Gravity.CENTER);
+            ph.setBackground(round(FIELD, 10));
+            cover = ph;
+        } else cover = makeThumb(favs.get(0));
+        card.addView(cover, new LinearLayout.LayoutParams(dp(76), dp(76)));
+        LinearLayout info = new LinearLayout(this);
+        info.setOrientation(LinearLayout.VERTICAL);
+        info.setPadding(dp(12), 0, dp(4), 0);
+        info.addView(tv("♥ " + t("favorites"), 15, FG, true));
+        info.addView(tv(tf("items_n", favs.size()), 12, MUTED, false));
+        card.addView(info, new LinearLayout.LayoutParams(0, -2, 1));
+        card.setOnClickListener(v -> {
+            if (!albumSelA.isEmpty()) return;
+            albumSelI.clear();
+            albumOpen = Library.FAV;
+            animGrid = true;
+            renderAlbums();
+        });
+    }
+
+    private void albumMenu() {
         final Library.Album a = lib.albumById(albumOpen);
+        if (a == null) return;
+        final String aid = a.id;
+        ArrayList<Act> acts = new ArrayList<>();
+        acts.add(new Act("✎", t("rename"), t("rename_album_d"), 0, () -> renameAlbumById(aid)));
+        if (lib.inAlbum(aid).size() > 1) acts.add(new Act("⇅", t("reorder"), t("reorder_d"), 0, () -> openReorder(aid)));
+        acts.add(new Act("▣", t("del_album"), t("albums_only_d"), RED, () -> deleteAlbums(new ArrayList<>(Collections.singletonList(aid)), false)));
+        acts.add(new Act("🗑", t("albums_files"), t("albums_files_d"), RED, () -> deleteAlbums(new ArrayList<>(Collections.singletonList(aid)), true)));
+        sheet(a.name, tf("items_n", lib.inAlbum(aid).size()), acts.toArray(new Act[0]));
+    }
+
+    private void renameAlbum() { renameAlbumById(albumOpen); }
+
+    private void renameAlbumById(String id) {
+        final Library.Album a = lib.albumById(id);
         if (a == null) return;
         promptText(t("rename"), a.name, t("album_name"), name -> {
             if (!name.isEmpty()) { a.name = name; lib.save(); renderAlbums(); }
         });
     }
 
-    private void deleteAlbumAsk() {
-        final Library.Album a = lib.albumById(albumOpen);
-        if (a == null) return;
-        showDlg(dlg().setTitle(t("del_album")).setMessage(a.name + "\n" + t("del_album_msg"))
-                .setNegativeButton(t("cancel"), null)
-                .setPositiveButton(t("del_album"), (d, w) -> { lib.deleteAlbum(a.id); lib.save(); albumOpen = null; refreshAll(); }));
+    private void deleteAlbumAsk() { albumMenu(); }
+
+    // Перетаскивание файлов в альбоме (ручной порядок)
+    private void openReorder(final String albumId) {
+        final Library.Album al = lib.albumById(albumId);
+        if (al == null) return;
+        final ArrayList<Library.Item> its = lib.inAlbum(albumId);
+        final ArrayList<String> ids = new ArrayList<>();
+        for (Library.Item it : its) ids.add(it.id);
+        final HashMap<String, Library.Item> byId = new HashMap<>();
+        for (Library.Item it : its) byId.put(it.id, it);
+        final Dialog d = new Dialog(this, android.R.style.Theme_Black_NoTitleBar_Fullscreen);
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setBackgroundColor(BG);
+        root.setOnApplyWindowInsetsListener((v, insets) -> {
+            v.setPadding(insets.getSystemWindowInsetLeft(), insets.getSystemWindowInsetTop(), insets.getSystemWindowInsetRight(), insets.getSystemWindowInsetBottom());
+            return insets;
+        });
+        LinearLayout head = new LinearLayout(this);
+        head.setGravity(Gravity.CENTER_VERTICAL);
+        head.setPadding(dp(8), dp(10), dp(12), dp(4));
+        TextView close = tv("✕", 20, FG, true);
+        close.setGravity(Gravity.CENTER);
+        close.setOnClickListener(v -> d.dismiss());
+        head.addView(close, new LinearLayout.LayoutParams(dp(44), dp(44)));
+        TextView ttl = tv(t("reorder"), 19, FG, true);
+        ttl.setPadding(dp(8), 0, dp(8), 0);
+        head.addView(ttl, new LinearLayout.LayoutParams(0, -2, 1));
+        TextView save = primaryButton(t("save"));
+        save.setBackground(round(ACCENT, 20));
+        save.setPadding(dp(18), 0, dp(18), 0);
+        head.addView(save, new LinearLayout.LayoutParams(-2, dp(40)));
+        root.addView(head, new LinearLayout.LayoutParams(-1, -2));
+        TextView hint = tv(t("reorder_hint"), 12, MUTED, false);
+        hint.setPadding(dp(16), dp(2), dp(16), dp(8));
+        root.addView(hint, new LinearLayout.LayoutParams(-1, -2));
+        final ScrollView sv = new ScrollView(this);
+        final LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(12), 0, dp(12), dp(16));
+        sv.addView(box);
+        root.addView(sv, new LinearLayout.LayoutParams(-1, 0, 1));
+
+        final int H = dp(72), M = dp(8), STEP = H + M;
+        final Runnable[] build = new Runnable[1];
+        build[0] = () -> {
+            box.removeAllViews();
+            for (int i = 0; i < ids.size(); i++) {
+                final Library.Item it = byId.get(ids.get(i));
+                final LinearLayout row = new LinearLayout(this);
+                row.setGravity(Gravity.CENTER_VERTICAL);
+                row.setPadding(dp(8), dp(8), dp(4), dp(8));
+                row.setBackground(round(PANEL, 14));
+                row.addView(makeThumb(it), new LinearLayout.LayoutParams(dp(56), dp(56)));
+                TextView nm = tv((i + 1) + ".  " + it.name, 14, FG, true);
+                nm.setSingleLine(true);
+                nm.setEllipsize(TextUtils.TruncateAt.END);
+                nm.setPadding(dp(10), 0, dp(6), 0);
+                row.addView(nm, new LinearLayout.LayoutParams(0, -2, 1));
+                final TextView handle = tv("≡", 26, MUTED, true);
+                handle.setGravity(Gravity.CENTER);
+                row.addView(handle, new LinearLayout.LayoutParams(dp(56), -1));
+                LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(-1, H);
+                rp.bottomMargin = M;
+                box.addView(row, rp);
+                final int startIdx = i;
+                final float[] st = new float[3];   // стартовый rawY, стартовый scrollY, последний rawY
+                final boolean[] drag = {false};
+                final Runnable[] auto = new Runnable[1];
+                final Runnable apply = () -> {
+                    float dy = (st[2] - st[0]) + (sv.getScrollY() - st[1]);
+                    dy = Math.max(-startIdx * STEP, Math.min((ids.size() - 1 - startIdx) * STEP, dy));
+                    row.setTranslationY(dy);
+                    int target = Math.max(0, Math.min(ids.size() - 1, startIdx + Math.round(dy / STEP)));
+                    for (int j = 0; j < box.getChildCount(); j++) {
+                        if (j == startIdx) continue;
+                        float shift = 0;
+                        if (startIdx < target && j > startIdx && j <= target) shift = -STEP;
+                        else if (startIdx > target && j >= target && j < startIdx) shift = STEP;
+                        box.getChildAt(j).animate().translationY(shift).setDuration(120).start();
+                    }
+                };
+                auto[0] = () -> {
+                    if (!drag[0]) return;
+                    int[] loc = new int[2];
+                    sv.getLocationOnScreen(loc);
+                    float top = loc[1], bot = loc[1] + sv.getHeight();
+                    if (st[2] < top + dp(90)) sv.scrollBy(0, -dp(10));
+                    else if (st[2] > bot - dp(90)) sv.scrollBy(0, dp(10));
+                    else { ui.postDelayed(auto[0], 16); return; }
+                    apply.run();
+                    ui.postDelayed(auto[0], 16);
+                };
+                handle.setOnTouchListener((hv, e) -> {
+                    int a = e.getActionMasked();
+                    if (a == MotionEvent.ACTION_DOWN) {
+                        drag[0] = true;
+                        st[0] = e.getRawY(); st[1] = sv.getScrollY(); st[2] = e.getRawY();
+                        row.setElevation(dp(8));
+                        row.animate().scaleX(1.03f).scaleY(1.03f).setDuration(120).start();
+                        sv.requestDisallowInterceptTouchEvent(true);
+                        ui.post(auto[0]);
+                        return true;
+                    } else if (a == MotionEvent.ACTION_MOVE && drag[0]) {
+                        st[2] = e.getRawY();
+                        apply.run();
+                        return true;
+                    } else if ((a == MotionEvent.ACTION_UP || a == MotionEvent.ACTION_CANCEL) && drag[0]) {
+                        drag[0] = false;
+                        sv.requestDisallowInterceptTouchEvent(false);
+                        float dy = row.getTranslationY();
+                        final int target = Math.max(0, Math.min(ids.size() - 1, startIdx + Math.round(dy / STEP)));
+                        row.animate().translationY((target - startIdx) * STEP).scaleX(1f).scaleY(1f).setDuration(150).withEndAction(() -> {
+                            String moved = ids.remove(startIdx);
+                            ids.add(target, moved);
+                            build[0].run();
+                        }).start();
+                        return true;
+                    }
+                    return false;
+                });
+            }
+        };
+        build[0].run();
+        save.setOnClickListener(v -> {
+            al.order.clear();
+            al.order.addAll(ids);
+            lib.save();
+            d.dismiss();
+            refreshAll();
+        });
+        d.setContentView(root);
+        animWin(d, R.style.OmvSheetAnim);
+        openDialogs.add(d);
+        d.show();
     }
 
     // ---------- Загрузка ----------
@@ -1441,6 +1963,10 @@ public class MainActivity extends Activity {
             TextView name = tv(it.name, 14, FG, true);
             name.setMaxLines(2);
             name.setEllipsize(TextUtils.TruncateAt.END);
+            name.setOnClickListener(v -> {
+                if (!sel.isEmpty()) { if (!sel.remove(it.id)) sel.add(it.id); renderUpload(); }
+                else renameItem(it, null);
+            });
             details.addView(name);
             String kind = Library.isPdf(it.name) ? t("kind_manga") : Library.isVideo(it.name) ? t("kind_video") : t("kind_photo");
             ArrayList<String> anames = new ArrayList<>();
@@ -1478,6 +2004,7 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams fp = params(-1, -2);
         fp.topMargin = dp(12);
         listBox.addView(foot, fp);
+        fxTree(listBox);
     }
 
     // ---------- Теги, альбомы, корзина ----------
@@ -1493,13 +2020,60 @@ public class MainActivity extends Activity {
         return input;
     }
 
+    // Поле тегов с подсказками: уже существующие теги предлагаются по набранному тексту
+    private LinearLayout tagBox(final EditText input) {
+        final LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(20), dp(8), dp(20), 0);
+        box.addView(input, new LinearLayout.LayoutParams(-1, -2));
+        final TreeMap<String, Integer> counts = allTagCounts();
+        if (counts.isEmpty()) return box;
+        TextView lbl = tv(t("tag_suggest"), 11.5f, MUTED, true);
+        lbl.setPadding(0, dp(10), 0, dp(6));
+        box.addView(lbl);
+        final Flow sugg = new Flow(this, dp(6), dp(6)).rows(3);
+        box.addView(sugg, new LinearLayout.LayoutParams(-1, -2));
+        final Runnable[] upd = new Runnable[1];
+        upd[0] = () -> {
+            sugg.removeAllViews();
+            String txt = input.getText().toString();
+            int cut = Math.max(Math.max(txt.lastIndexOf(','), txt.lastIndexOf(';')), txt.lastIndexOf('\n'));
+            final String head = txt.substring(0, cut + 1);
+            String token = txt.substring(cut + 1).trim().toLowerCase(Locale.ROOT);
+            while (token.startsWith("#")) token = token.substring(1).trim();
+            List<String> have = Library.parseTags(head);
+            ArrayList<Map.Entry<String, Integer>> es = new ArrayList<>(counts.entrySet());
+            Collections.sort(es, (x, y) -> y.getValue() - x.getValue());
+            int shown = 0;
+            for (Map.Entry<String, Integer> en : es) {
+                final String tag = en.getKey();
+                if (have.contains(tag) || tag.equals(token) || (!token.isEmpty() && !tag.contains(token))) continue;
+                TextView c = tagPill(tag, false);
+                c.setOnClickListener(v -> {
+                    String base = head.replaceAll("\\s+$", "");
+                    String nt = (base.isEmpty() ? "" : base + " ") + tag + ", ";
+                    input.setText(nt);
+                    input.setSelection(nt.length());
+                });
+                pressFx(c);
+                sugg.addView(c);
+                if (++shown >= 14) break;
+            }
+        };
+        input.addTextChangedListener(new android.text.TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence a, int b, int c, int d) { }
+            @Override public void onTextChanged(CharSequence a, int b, int c, int d) { upd[0].run(); }
+            @Override public void afterTextChanged(android.text.Editable e) { }
+        });
+        upd[0].run();
+        return box;
+    }
+
     private void editTags(final Library.Item it) { editTags(it, null); }
 
     private void editTags(final Library.Item it, final Runnable after) {
         final EditText input = tagInput(it.tags);
-        LinearLayout box = new LinearLayout(this);
-        box.setPadding(dp(20), dp(8), dp(20), 0);
-        box.addView(input, params(-1, 56));
+        LinearLayout box = tagBox(input);
         showDlg(dlg().setTitle(t("act_tags")).setMessage(it.name).setView(box)
                 .setNegativeButton(t("cancel"), null)
                 .setPositiveButton(t("save"), (d, w) -> {
@@ -1514,9 +2088,7 @@ public class MainActivity extends Activity {
         final ArrayList<Library.Item> targets = selectedItems();
         if (targets.isEmpty()) return;
         final EditText input = tagInput("");
-        LinearLayout box = new LinearLayout(this);
-        box.setPadding(dp(20), dp(8), dp(20), 0);
-        box.addView(input, params(-1, 56));
+        LinearLayout box = tagBox(input);
         showDlg(dlg().setTitle(t("act_tags") + " · " + tf("sel_n", targets.size())).setView(box)
                 .setNegativeButton(t("cancel"), null)
                 .setNeutralButton(t("tags_replace"), (d, w) -> {
@@ -1540,27 +2112,48 @@ public class MainActivity extends Activity {
         toast(tf("moved_trash", targets.size()));
     }
 
+    private void finishAlbumMove(int n) {
+        lib.save();
+        sel.clear(); albumSelI.clear(); feedSel.clear();
+        refreshAll();
+        toast(tf("moved_album", n));
+    }
+
     private void chooseAlbum(final ArrayList<Library.Item> targets) {
         if (targets.isEmpty()) return;
-        final ArrayList<Library.Album> al = new ArrayList<>(lib.albums);
-        final String[] names = new String[al.size() + 2];
-        names[0] = "+ " + t("new_album");
-        for (int i = 0; i < al.size(); i++) names[i + 1] = al.get(i).name;
-        names[names.length - 1] = t("no_album");
-        showDlg(dlg().setTitle(t("pick_album")).setItems(names, (d, which) -> {
-            if (which == 0) {
-                promptText(t("new_album"), "", t("album_name"), name -> {
-                    if (name.isEmpty()) return;
-                    Library.Album a = lib.createAlbum(name);
-                    for (Library.Item it : targets) Library.addAlb(it, a.id);
-                    lib.save(); sel.clear(); albumSelI.clear(); refreshAll(); toast(tf("moved_album", targets.size()));
-                });
-            } else {
-                if (which == names.length - 1) { for (Library.Item it : targets) it.album = ""; }
-                else { String id = al.get(which - 1).id; for (Library.Item it : targets) Library.addAlb(it, id); }
-                lib.save(); sel.clear(); albumSelI.clear(); refreshAll(); toast(tf("moved_album", targets.size()));
-            }
-        }).setNegativeButton(t("cancel"), null));
+        final int n = targets.size();
+        ArrayList<Act> acts = new ArrayList<>();
+        acts.add(new Act("＋", t("new_album"), null, 0, () -> promptText(t("new_album"), "", t("album_name"), name -> {
+            if (name.isEmpty()) return;
+            Library.Album a = lib.createAlbum(name);
+            for (Library.Item it : targets) Library.addAlb(it, a.id);
+            finishAlbumMove(n);
+        })));
+        for (final Library.Album al : new ArrayList<>(lib.albums)) {
+            acts.add(new Act("▣", al.name, tf("items_n", lib.inAlbum(al.id).size()), 0, () -> {
+                for (Library.Item it : targets) Library.addAlb(it, al.id);
+                finishAlbumMove(n);
+            }));
+        }
+        acts.add(new Act("✕", t("no_album"), null, RED, () -> {
+            for (Library.Item it : targets) it.album = "";
+            finishAlbumMove(n);
+        }));
+        sheet(t("pick_album"), tf("sel_n", n), acts.toArray(new Act[0]));
+    }
+
+    // Переименование файла: расширение сохраняется (по нему определяется тип)
+    private void renameItem(final Library.Item it, final Runnable after) {
+        int dot = it.name.lastIndexOf('.');
+        final String ext = dot > 0 ? it.name.substring(dot) : "";
+        String base = dot > 0 ? it.name.substring(0, dot) : it.name;
+        promptText(t("rename"), base, t("file_name"), name -> {
+            if (name.isEmpty()) return;
+            it.name = name + ext;
+            lib.save();
+            refreshAll();
+            if (after != null) after.run();
+        });
     }
 
     private void openTrash() {
@@ -1646,6 +2239,7 @@ public class MainActivity extends Activity {
                 bp.topMargin = dp(6);
                 info.addView(btns, bp);
             }
+            fxTree(box);
         };
         restoreAll.setOnClickListener(v -> {
             ArrayList<Library.Item> tl = lib.trashList();
@@ -1717,13 +2311,20 @@ public class MainActivity extends Activity {
         final int[] token = {0};
         final Runnable[] show = new Runnable[1];
         final Runnable[] pageShow = new Runnable[1];
+        final IntCb[] stepPage = new IntCb[1];
         final MediaController[] mcRef = new MediaController[1];
-        final ImageView[] pdfView = new ImageView[1];
+        final ZoomImageView[] zoomRef = new ZoomImageView[1];
+        final VideoView[] vvRef = new VideoView[1];
+        final ScrollView[] vsRef = new ScrollView[1];
+        final int[][] topsRef = new int[1][];
+        final String[] curId = {null};
         final boolean[] pdfMode = {false};
         final boolean[] videoMode = {false};
+        final int[] mmode = {Math.max(0, Math.min(2, prefs.getInt("mmode", 0)))};   // 0 слева направо, 1 справа налево, 2 вертикальная лента
         final View[] chrome = new View[4];   // верх, низ, стрелка назад, стрелка вперёд
         final boolean[] tagsOpen = {false};
         final Runnable[] tagsUpd = new Runnable[1];
+        final Runnable[] saveVp = new Runnable[1];
         final int[] slide = {0};
         final PdfHolder pdf = new PdfHolder();
         final GestureDetector gd = new GestureDetector(this, new GestureDetector.SimpleOnGestureListener() {
@@ -1735,11 +2336,12 @@ public class MainActivity extends Activity {
                     tagsUpd[0].run();
                     return true;
                 }
+                if (zoomRef[0] != null && zoomRef[0].isZoomed()) return false;
                 if (Math.abs(dx) > dp(80) && Math.abs(dx) > Math.abs(dy) * 1.5f) {
                     slide[0] = dx < 0 ? 1 : -1;
-                    if (pdfMode[0]) {
-                        int np = pdf.page + (dx < 0 ? 1 : -1);
-                        if (np >= 0 && np < pdf.pages) { pdf.page = np; pageShow[0].run(); }
+                    if (pdfMode[0] && mmode[0] != 2) {
+                        boolean rtl = mmode[0] == 1;
+                        stepPage[0].on(((dx < 0) != rtl) ? 1 : -1);
                         return true;
                     }
                     if (list.size() < 2) return false;
@@ -1768,13 +2370,14 @@ public class MainActivity extends Activity {
         rootF.setBackgroundColor(0xFF000000);
         rootF.addView(media, new FrameLayout.LayoutParams(-1, -1));
 
-        // Верхняя панель: закрыть, счётчик, удалить
+        // Верхняя панель: закрыть, счётчик, избранное, удалить
         final LinearLayout top = new LinearLayout(this);
         top.setGravity(Gravity.CENTER_VERTICAL);
         top.setPadding(dp(12), dp(14), dp(12), dp(26));
         top.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, new int[]{0xCC000000, 0x00000000}));
         TextView close = circleBtn("✕", 16);
         TextView del = circleBtn("🗑", 16);
+        final TextView favB = circleBtn("♡", 19);
         final TextView counter = tv("", 13, 0xFFFFFFFF, true);
         counter.setGravity(Gravity.CENTER);
         counter.setPadding(dp(14), dp(7), dp(14), dp(7));
@@ -1783,6 +2386,9 @@ public class MainActivity extends Activity {
         top.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1));
         top.addView(counter, new LinearLayout.LayoutParams(-2, -2));
         top.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1));
+        LinearLayout.LayoutParams fbp = new LinearLayout.LayoutParams(dp(40), dp(40));
+        fbp.setMarginEnd(dp(8));
+        top.addView(favB, fbp);
         top.addView(del, new LinearLayout.LayoutParams(dp(40), dp(40)));
         rootF.addView(top, new FrameLayout.LayoutParams(-1, -2, Gravity.TOP));
 
@@ -1795,7 +2401,7 @@ public class MainActivity extends Activity {
         rootF.addView(prev, plp);
         rootF.addView(next, nlp);
 
-        // Нижняя панель: страницы PDF, имя, детали, цветные теги
+        // Нижняя панель: страницы PDF, имя, детали, окошко тегов
         final LinearLayout bottom = new LinearLayout(this);
         bottom.setOrientation(LinearLayout.VERTICAL);
         bottom.setPadding(dp(18), dp(16), dp(18), dp(20));
@@ -1808,21 +2414,32 @@ public class MainActivity extends Activity {
         final LinearLayout pdfBar = new LinearLayout(this);
         pdfBar.setGravity(Gravity.CENTER);
         TextView pPrev = viewerBtn("◀"), pNext = viewerBtn("▶");
+        final TextView modeBtn = viewerBtn("→");
         final TextView pageTxt = tv("", 14, 0xFFF0F0F4, true);
         pageTxt.setGravity(Gravity.CENTER);
         pdfBar.addView(pPrev, new LinearLayout.LayoutParams(dp(56), dp(40)));
-        pdfBar.addView(pageTxt, new LinearLayout.LayoutParams(dp(150), -2));
+        pdfBar.addView(pageTxt, new LinearLayout.LayoutParams(dp(130), -2));
         pdfBar.addView(pNext, new LinearLayout.LayoutParams(dp(56), dp(40)));
+        pdfBar.addView(modeBtn, new LinearLayout.LayoutParams(dp(56), dp(40)));
         pdfBar.setVisibility(View.GONE);
         bottom.addView(pdfBar, new LinearLayout.LayoutParams(-1, -2));
+
+        LinearLayout nameRow = new LinearLayout(this);
+        nameRow.setGravity(Gravity.CENTER_VERTICAL);
         final TextView nameTv = tv("", 15, 0xFFFFFFFF, true);
         nameTv.setMaxLines(2);
         nameTv.setEllipsize(TextUtils.TruncateAt.END);
-        bottom.addView(nameTv, new LinearLayout.LayoutParams(-1, -2));
+        nameRow.addView(nameTv, new LinearLayout.LayoutParams(0, -2, 1));
+        TextView renameB = circleBtn("✎", 13);
+        LinearLayout.LayoutParams rbp = new LinearLayout.LayoutParams(dp(34), dp(34));
+        rbp.setMarginStart(dp(8));
+        nameRow.addView(renameB, rbp);
+        bottom.addView(nameRow, new LinearLayout.LayoutParams(-1, -2));
         final TextView metaTv = tv("", 12, 0xFFB0B3BD, false);
         LinearLayout.LayoutParams mlp = new LinearLayout.LayoutParams(-1, -2);
         mlp.topMargin = dp(2);
         bottom.addView(metaTv, mlp);
+
         // Окошко тегов: ярлык поднимает/опускает список, карандаш открывает редактор
         final LinearLayout tagsHead = new LinearLayout(this);
         tagsHead.setGravity(Gravity.CENTER_VERTICAL);
@@ -1837,31 +2454,44 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams thp = new LinearLayout.LayoutParams(-1, -2);
         thp.topMargin = dp(12);
         bottom.addView(tagsHead, thp);
-        final Flow tagsFlow = new Flow(this, dp(6), dp(6)).rows(5);
+        // Теги в прокручиваемом окошке: помещаются все, сколько бы их ни было
+        final MaxHScroll tagsScroll = new MaxHScroll(this, (int) (getResources().getDisplayMetrics().heightPixels * 0.34f));
+        final Flow tagsFlow = new Flow(this, dp(6), dp(6));
+        tagsScroll.addView(tagsFlow, new ViewGroup.LayoutParams(-1, -2));
         LinearLayout.LayoutParams tflp = new LinearLayout.LayoutParams(-1, -2);
         tflp.topMargin = dp(12);
-        tagsFlow.setVisibility(View.GONE);
-        bottom.addView(tagsFlow, tflp);
+        tagsScroll.setVisibility(View.GONE);
+        bottom.addView(tagsScroll, tflp);
         final TextView tagsEmpty = tv(t("tap_add_tags"), 12, 0xFFB0B3BD, false);
         tagsEmpty.setVisibility(View.GONE);
         LinearLayout.LayoutParams tep = new LinearLayout.LayoutParams(-1, -2);
         tep.topMargin = dp(10);
         bottom.addView(tagsEmpty, tep);
-        LayoutTransition lt = new LayoutTransition();
-        lt.enableTransitionType(LayoutTransition.CHANGING);
-        lt.setDuration(260);
-        bottom.setLayoutTransition(lt);
         tagsUpd[0] = () -> {
             Library.Item cur = list.get(idx[0]);
             List<String> ts = Library.tagsOf(cur);
             tagsLabel.setText((tagsOpen[0] ? "▾ " : "▴ ") + t("act_tags") + (ts.isEmpty() ? "" : " · " + ts.size()));
+            boolean showFlow = tagsOpen[0] && !ts.isEmpty();
+            boolean showEmpty = tagsOpen[0] && ts.isEmpty();
+            if ((tagsScroll.getVisibility() == View.VISIBLE) != showFlow || (tagsEmpty.getVisibility() == View.VISIBLE) != showEmpty) {
+                if (bottom.isAttachedToWindow()) TransitionManager.beginDelayedTransition(bottom);
+            }
             tagsFlow.removeAllViews();
             for (String s : ts) tagsFlow.addView(tagPill(s, false));
-            tagsFlow.setVisibility(tagsOpen[0] && !ts.isEmpty() ? View.VISIBLE : View.GONE);
-            tagsEmpty.setVisibility(tagsOpen[0] && ts.isEmpty() ? View.VISIBLE : View.GONE);
+            tagsScroll.setVisibility(showFlow ? View.VISIBLE : View.GONE);
+            tagsEmpty.setVisibility(showEmpty ? View.VISIBLE : View.GONE);
+            tagsScroll.scrollTo(0, 0);
         };
         tagsLabel.setOnClickListener(v -> { tagsOpen[0] = !tagsOpen[0]; tagsUpd[0].run(); });
         pencil.setOnClickListener(v -> editTags(list.get(idx[0]), () -> { tagsOpen[0] = true; tagsUpd[0].run(); }));
+        renameB.setOnClickListener(v -> {
+            final Library.Item cur = list.get(idx[0]);
+            renameItem(cur, () -> nameTv.setText(cur.name));
+        });
+        nameTv.setOnClickListener(v -> {
+            final Library.Item cur = list.get(idx[0]);
+            renameItem(cur, () -> nameTv.setText(cur.name));
+        });
         rootF.addView(bottom, new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM));
         chrome[0] = top; chrome[1] = bottom; chrome[2] = prev; chrome[3] = next;
         bottom.addOnLayoutChangeListener((vw0, c1, c2, c3, c4, c5, c6, c7, c8) -> {
@@ -1871,11 +2501,41 @@ public class MainActivity extends Activity {
             }
         });
 
+        final Runnable updFav = () -> {
+            Library.Item cur = list.get(idx[0]);
+            favB.setText(cur.fav ? "♥" : "♡");
+            favB.setTextColor(cur.fav ? 0xFFFF5C8A : 0xFFFFFFFF);
+        };
+        favB.setOnClickListener(v -> {
+            Library.Item cur = list.get(idx[0]);
+            cur.fav = !cur.fav;
+            lib.save();
+            updFav.run();
+            favB.animate().cancel();
+            favB.animate().scaleX(1.4f).scaleY(1.4f).setDuration(120).withEndAction(() -> favB.animate().scaleX(1f).scaleY(1f).setDuration(200).setInterpolator(new OvershootInterpolator(3f)).start()).start();
+            refreshAll();
+        });
+
         close.setOnClickListener(v -> dialog.dismiss());
         prev.setOnClickListener(v -> { slide[0] = -1; idx[0] = (idx[0] + list.size() - 1) % list.size(); show[0].run(); });
         next.setOnClickListener(v -> { slide[0] = 1; idx[0] = (idx[0] + 1) % list.size(); show[0].run(); });
-        pPrev.setOnClickListener(v -> { if (pdf.page > 0) { pdf.page--; pageShow[0].run(); } });
-        pNext.setOnClickListener(v -> { if (pdf.page + 1 < pdf.pages) { pdf.page++; pageShow[0].run(); } });
+        stepPage[0] = dlt -> {
+            int np = pdf.page + dlt;
+            if (np < 0 || np >= pdf.pages) return;
+            if (mmode[0] == 2) {
+                if (vsRef[0] != null && topsRef[0] != null && np < topsRef[0].length) vsRef[0].smoothScrollTo(0, topsRef[0][np]);
+            } else { pdf.page = np; pageShow[0].run(); }
+        };
+        pPrev.setOnClickListener(v -> stepPage[0].on(mmode[0] == 1 ? 1 : -1));
+        pNext.setOnClickListener(v -> stepPage[0].on(mmode[0] == 1 ? -1 : 1));
+        final String[] MG = {"→", "←", "↕"};
+        modeBtn.setOnClickListener(v -> {
+            mmode[0] = (mmode[0] + 1) % 3;
+            prefs.edit().putInt("mmode", mmode[0]).apply();
+            toast(t("mmode_" + mmode[0]));
+            slide[0] = 0;
+            show[0].run();
+        });
         // Удаление прямо из просмотра: файл уходит в корзину, показывается следующий
         del.setOnClickListener(v -> {
             final int i = idx[0];
@@ -1894,10 +2554,23 @@ public class MainActivity extends Activity {
             }).start();
         });
 
+        // позиция видео запоминается и восстанавливается
+        saveVp[0] = () -> {
+            VideoView vv = vvRef[0];
+            if (vv == null || curId[0] == null || !videoMode[0]) return;
+            try {
+                int pos = vv.getCurrentPosition(), dur = vv.getDuration();
+                SharedPreferences.Editor ed = prefs.edit();
+                if (dur > 0 && pos > 3000 && pos < dur - 3000) ed.putInt("vp_" + curId[0], pos); else ed.remove("vp_" + curId[0]);
+                ed.apply();
+            } catch (Exception ignored) { }
+        };
+
         pageShow[0] = () -> {
             final int pg = pdf.page;
             final int my = token[0];
-            final ImageView target = pdfView[0];
+            final String pid = curId[0];
+            final ImageView target = zoomRef[0];
             pdfExec.execute(() -> {
                 if (pdf.r == null || pg < 0 || pg >= pdf.pages) return;
                 Bitmap bmp = null;
@@ -1916,12 +2589,14 @@ public class MainActivity extends Activity {
                     if (my == token[0] && fb != null && target != null) {
                         target.setImageBitmap(fb);
                         pageTxt.setText(tf("page_n", pg + 1, total));
+                        if (pid != null) prefs.edit().putInt("pg_" + pid, pg).apply();
                     }
                 });
             });
         };
 
         show[0] = () -> {
+            saveVp[0].run();
             token[0]++;
             final int my = token[0];
             media.animate().cancel();
@@ -1935,12 +2610,18 @@ public class MainActivity extends Activity {
             stopMedia(media);
             media.removeAllViews();
             closePdf(pdf);
+            zoomRef[0] = null;
+            vvRef[0] = null;
+            vsRef[0] = null;
+            topsRef[0] = null;
             pdfMode[0] = false;
             videoMode[0] = false;
             pdfBar.setVisibility(View.GONE);
-            Library.Item it = list.get(idx[0]);
+            final Library.Item it = list.get(idx[0]);
+            curId[0] = it.id;
             counter.setText((idx[0] + 1) + " / " + list.size());
             nameTv.setText(it.name);
+            updFav.run();
             final File f = new File(it.path);
             String kind = Library.isPdf(it.name) ? t("kind_manga") : Library.isVideo(it.name) ? t("kind_video") : t("kind_photo");
             metaTv.setText(kind + " · " + fmtSize(f.length()) + " · " + DateFormat.getDateInstance(DateFormat.MEDIUM, new Locale(lang)).format(new Date(it.added)));
@@ -1954,11 +2635,15 @@ public class MainActivity extends Activity {
                 videoMode[0] = true;
                 top.setVisibility(View.VISIBLE);
                 bottom.setVisibility(View.VISIBLE);
-                VideoView vv = new VideoView(this);
+                final VideoView vv = new VideoView(this);
                 MediaController mc = new MediaController(this);
                 mc.setAnchorView(vv);
                 vv.setMediaController(mc);
                 mcRef[0] = mc;
+                vvRef[0] = vv;
+                final int resume = prefs.getInt("vp_" + it.id, 0);
+                vv.setOnPreparedListener(mp -> { if (my == token[0] && resume > 0) vv.seekTo(resume); });
+                vv.setOnCompletionListener(mp -> prefs.edit().remove("vp_" + it.id).apply());
                 vv.setVideoPath(f.getAbsolutePath());
                 media.addView(vv, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
                 // видео и его кнопки управления остаются над нижней панелью
@@ -1971,29 +2656,49 @@ public class MainActivity extends Activity {
             } else if (Library.isPdf(it.name)) {
                 media.setLayoutParams(mlp2);
                 pdfMode[0] = true;
-                pdf.page = 0;
+                pdf.page = Math.max(0, prefs.getInt("pg_" + it.id, 0));
                 pdfBar.setVisibility(View.VISIBLE);
                 pageTxt.setText("…");
-                final ImageView iv = new ImageView(this);
-                iv.setScaleType(ImageView.ScaleType.FIT_CENTER);
-                media.addView(iv, new FrameLayout.LayoutParams(-1, -1));
-                pdfView[0] = iv;
+                modeBtn.setText(MG[mmode[0]]);
+                final boolean vertical = mmode[0] == 2;
+                final int startPage0 = pdf.page;
                 pdfExec.execute(() -> {
+                    float[] ratio = null;
                     try {
                         pdf.pfd = ParcelFileDescriptor.open(f, ParcelFileDescriptor.MODE_READ_ONLY);
                         pdf.r = new PdfRenderer(pdf.pfd);
                         pdf.pages = pdf.r.getPageCount();
+                        if (pdf.page >= pdf.pages) pdf.page = Math.max(0, pdf.pages - 1);
+                        if (vertical) {
+                            ratio = new float[pdf.pages];
+                            for (int pi = 0; pi < pdf.pages; pi++) {
+                                PdfRenderer.Page p = pdf.r.openPage(pi);
+                                ratio[pi] = p.getHeight() / (float) Math.max(1, p.getWidth());
+                                p.close();
+                            }
+                        }
                     } catch (Exception e) {
                         ui.post(() -> toast(t("pdf_failed")));
                         return;
                     }
-                    ui.post(() -> { if (my == token[0]) pageShow[0].run(); });
+                    final float[] fr = ratio;
+                    ui.post(() -> {
+                        if (my != token[0]) return;
+                        if (!vertical) {
+                            final ZoomImageView iv = new ZoomImageView(this);
+                            media.addView(iv, new FrameLayout.LayoutParams(-1, -1));
+                            zoomRef[0] = iv;
+                            pageShow[0].run();
+                            return;
+                        }
+                        buildVerticalPdf(media, pdf, fr, my, token, it.id, pageTxt, vsRef, topsRef, startPage0);
+                    });
                 });
             } else {
                 media.setLayoutParams(mlp2);
-                final ImageView iv = new ImageView(this);
-                iv.setScaleType(ImageView.ScaleType.FIT_CENTER);
+                final ZoomImageView iv = new ZoomImageView(this);
                 media.addView(iv, new FrameLayout.LayoutParams(-1, -1));
+                zoomRef[0] = iv;
                 pool.execute(() -> {
                     final Bitmap b = decodeSampled(f.getAbsolutePath(), 2048);
                     ui.post(() -> {
@@ -2004,14 +2709,105 @@ public class MainActivity extends Activity {
         };
         dialog.setContentView(rootF);
         animWin(dialog, R.style.OmvFadeAnim);
+        fxTree(rootF);
         dialog.setOnDismissListener(d -> {
+            saveVp[0].run();
             if (mcRef[0] != null) mcRef[0].hide();
             stopMedia(media);
             closePdf(pdf);
+            refreshAll();
         });
         openDialogs.add(dialog);
         dialog.show();
         show[0].run();
+        final Runnable[] tick = new Runnable[1];
+        tick[0] = () -> {
+            if (!dialog.isShowing()) return;
+            saveVp[0].run();
+            ui.postDelayed(tick[0], 3000);
+        };
+        ui.postDelayed(tick[0], 3000);
+    }
+
+    // Режим «вертикальная лента» для манги: страницы рисуются по мере прокрутки
+    private void buildVerticalPdf(FrameLayout media, final PdfHolder pdf, final float[] ratio, final int my, final int[] token,
+                                  final String itemId, final TextView pageTxt, ScrollView[] vsRef, int[][] topsRef, int startPage) {
+        final int n = ratio.length;
+        if (n == 0) return;
+        final ScrollView vs = new ScrollView(this);
+        vs.setVerticalScrollBarEnabled(false);
+        final LinearLayout vbox = new LinearLayout(this);
+        vbox.setOrientation(LinearLayout.VERTICAL);
+        final int w0 = getResources().getDisplayMetrics().widthPixels;
+        final ImageView[] views = new ImageView[n];
+        final boolean[] loaded = new boolean[n], pending = new boolean[n];
+        final int[] tops = new int[n + 1];
+        final int gap = dp(4);
+        int y = 0;
+        for (int i = 0; i < n; i++) {
+            ImageView iv = new ImageView(this);
+            iv.setScaleType(ImageView.ScaleType.FIT_XY);
+            iv.setBackgroundColor(0xFF1B1B1B);
+            int h = Math.max(dp(40), (int) (w0 * ratio[i]));
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(w0, h);
+            lp.bottomMargin = gap;
+            vbox.addView(iv, lp);
+            views[i] = iv;
+            tops[i] = y;
+            y += h + gap;
+        }
+        tops[n] = y;
+        vs.addView(vbox, new ViewGroup.LayoutParams(-1, -2));
+        final Runnable[] render = new Runnable[1];
+        render[0] = () -> {
+            if (my != token[0]) return;
+            int sy = vs.getScrollY(), vh = Math.max(vs.getHeight(), dp(200));
+            int cur = n - 1;
+            for (int i = 0; i < n; i++) if (tops[i + 1] > sy + vh / 3) { cur = i; break; }
+            for (int i = 0; i < n; i++) {
+                boolean near = tops[i + 1] > sy - vh && tops[i] < sy + vh * 2;
+                boolean far = tops[i + 1] < sy - vh * 3 || tops[i] > sy + vh * 4;
+                if (near && !loaded[i] && !pending[i]) {
+                    pending[i] = true;
+                    final int pi = i;
+                    pdfExec.execute(() -> {
+                        Bitmap bmp = null;
+                        if (my == token[0] && pdf.r != null && pi < pdf.pages) {
+                            try {
+                                PdfRenderer.Page p = pdf.r.openPage(pi);
+                                int w = Math.min(w0, 1100);
+                                int h = Math.max(1, (int) (w * ratio[pi]));
+                                bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+                                bmp.eraseColor(0xFFFFFFFF);
+                                p.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);
+                                p.close();
+                            } catch (Throwable ignored) { bmp = null; }
+                        }
+                        final Bitmap fb = bmp;
+                        ui.post(() -> {
+                            pending[pi] = false;
+                            if (my == token[0] && fb != null) { views[pi].setImageBitmap(fb); loaded[pi] = true; }
+                        });
+                    });
+                } else if (far && loaded[i]) {
+                    views[i].setImageDrawable(null);
+                    loaded[i] = false;
+                }
+            }
+            if (cur != pdf.page) {
+                pdf.page = cur;
+                pageTxt.setText(tf("page_n", cur + 1, n));
+                prefs.edit().putInt("pg_" + itemId, cur).apply();
+            }
+        };
+        vs.setOnScrollChangeListener((v1, a1, a2, a3, a4) -> render[0].run());
+        media.addView(vs, new FrameLayout.LayoutParams(-1, -1));
+        vsRef[0] = vs;
+        topsRef[0] = tops;
+        final int sp = Math.max(0, Math.min(n - 1, startPage));
+        pdf.page = sp;
+        pageTxt.setText(tf("page_n", sp + 1, n));
+        vs.post(() -> { vs.scrollTo(0, tops[sp]); render[0].run(); });
     }
 
     // ---------- ПИН-код ----------
@@ -2034,6 +2830,36 @@ public class MainActivity extends Activity {
 
     private boolean checkPin(String pin) {
         return hashPin(pin, prefs.getString("pinsalt", "")).equals(prefs.getString("pinhash", ""));
+    }
+
+    private boolean hasDecoy() { return !prefs.getString("dpinhash", "").isEmpty(); }
+
+    private boolean checkDecoy(String pin) {
+        return hashPin(pin, prefs.getString("dpinsalt", "")).equals(prefs.getString("dpinhash", ""));
+    }
+
+    private void saveDecoy(String pin) {
+        byte[] raw = new byte[16];
+        new java.security.SecureRandom().nextBytes(raw);
+        StringBuilder salt = new StringBuilder();
+        for (byte b : raw) salt.append(String.format("%02x", b));
+        prefs.edit().putString("dpinsalt", salt.toString()).putString("dpinhash", hashPin(pin, salt.toString())).apply();
+    }
+
+    private void setDecoyFlow() {
+        promptPin(t("pin_current"), null, cur -> {
+            if (!checkPin(cur)) { toast(t("pin_wrong")); return; }
+            promptPin(t("decoy_new"), t("decoy_note"), p1 -> {
+                if (!p1.matches("\\d{4,8}")) { toast(t("pin_short")); return; }
+                if (checkPin(p1)) { toast(t("decoy_same")); return; }
+                promptPin(t("pin_repeat"), null, p2 -> {
+                    if (!p1.equals(p2)) { toast(t("pin_mismatch")); return; }
+                    saveDecoy(p1);
+                    toast(t("decoy_saved"));
+                    renderSettings();
+                });
+            });
+        });
     }
 
     private void savePin(String pin) {
@@ -2101,7 +2927,10 @@ public class MainActivity extends Activity {
             String p = pinBuf.toString();
             pinBuf.setLength(0);
             updateDots();
-            if (checkPin(p)) {
+            boolean realOk = checkPin(p);
+            boolean fakeOk = !realOk && hasDecoy() && checkDecoy(p);
+            if (realOk || fakeOk) {
+                switchVault(fakeOk);
                 authed = true;
                 pinFails = 0;
                 pinMsg.setText("");
@@ -2167,7 +2996,7 @@ public class MainActivity extends Activity {
     private void removePinFlow() {
         promptPin(t("pin_current"), null, cur -> {
             if (checkPin(cur)) {
-                prefs.edit().remove("pinhash").remove("pinsalt").apply();
+                prefs.edit().remove("pinhash").remove("pinsalt").remove("dpinhash").remove("dpinsalt").apply();
                 toast(t("pin_removed"));
                 renderSettings();
             } else toast(t("pin_wrong"));
@@ -2289,28 +3118,100 @@ public class MainActivity extends Activity {
         namesChip.setOnClickListener(v -> { showNames = !showNames; prefs.edit().putBoolean("names", showNames).apply(); renderSettings(); });
         setBox.addView(settingRow(t("set_names"), namesChip), new LinearLayout.LayoutParams(-1, -2));
 
-        setBox.addView(sectionLabel(t("set_security")));
-        setBox.addView(settingRow(t("pin_code"), tv(hasPin() ? t("pin_on") : t("pin_off"), 14, hasPin() ? ACCENT : MUTED, true)), new LinearLayout.LayoutParams(-1, -2));
-        LinearLayout pinRow = new LinearLayout(this);
-        if (!hasPin()) {
-            TextView set = primaryButton(t("pin_set"));
-            set.setOnClickListener(v -> setPinFlow());
-            pinRow.addView(set, new LinearLayout.LayoutParams(0, dp(46), 1));
-        } else {
-            TextView change = button(t("pin_change")), remove = button(t("pin_remove"));
-            remove.setTextColor(0xFFFFFFFF);
-            remove.setBackground(round(RED, 12));
-            change.setOnClickListener(v -> setPinFlow());
-            remove.setOnClickListener(v -> removePinFlow());
-            pinRow.addView(change, new LinearLayout.LayoutParams(0, dp(46), 1));
-            LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(0, dp(46), 1);
-            rp.setMarginStart(dp(8));
-            pinRow.addView(remove, rp);
+        LinearLayout.LayoutParams bgl = new LinearLayout.LayoutParams(-1, -2);
+        bgl.topMargin = dp(14);
+        setBox.addView(tv(t("set_bg"), 15, FG, true), bgl);
+        LinearLayout bgRow = new LinearLayout(this);
+        TextView bgPick = button(t("bg_choose"));
+        bgPick.setOnClickListener(v -> pickBg());
+        bgRow.addView(bgPick, new LinearLayout.LayoutParams(0, dp(46), 1));
+        final boolean hasBg = bgFile().exists();
+        if (hasBg) {
+            TextView bgRm = button(t("bg_remove"));
+            bgRm.setTextColor(0xFFFFFFFF);
+            bgRm.setBackground(round(RED, 12));
+            bgRm.setOnClickListener(v -> { bgFile().delete(); recreate(); });
+            LinearLayout.LayoutParams brp = new LinearLayout.LayoutParams(0, dp(46), 1);
+            brp.setMarginStart(dp(8));
+            bgRow.addView(bgRm, brp);
         }
-        setBox.addView(pinRow, new LinearLayout.LayoutParams(-1, -2));
-        TextView warn = tv(t("pin_warn"), 11.5f, MUTED, false);
-        warn.setPadding(0, dp(6), 0, 0);
-        setBox.addView(warn, new LinearLayout.LayoutParams(-1, -2));
+        LinearLayout.LayoutParams bgrp = new LinearLayout.LayoutParams(-1, -2);
+        bgrp.topMargin = dp(8);
+        setBox.addView(bgRow, bgrp);
+        if (hasBg) {
+            LinearLayout dimSt = new LinearLayout(this);
+            dimSt.setGravity(Gravity.CENTER_VERTICAL);
+            TextView dm = button("−"), dp2 = button("+");
+            final TextView dv2 = tv(prefs.getInt("bgdim", 55) + "%", 15, FG, true);
+            dv2.setGravity(Gravity.CENTER);
+            dm.setOnClickListener(v -> { prefs.edit().putInt("bgdim", Math.max(0, prefs.getInt("bgdim", 55) - 10)).apply(); applyBg(); renderSettings(); });
+            dp2.setOnClickListener(v -> { prefs.edit().putInt("bgdim", Math.min(90, prefs.getInt("bgdim", 55) + 10)).apply(); applyBg(); renderSettings(); });
+            dimSt.addView(dm, new LinearLayout.LayoutParams(dp(44), dp(40)));
+            dimSt.addView(dv2, new LinearLayout.LayoutParams(dp(56), -2));
+            dimSt.addView(dp2, new LinearLayout.LayoutParams(dp(44), dp(40)));
+            setBox.addView(settingRow(t("bg_dim"), dimSt), new LinearLayout.LayoutParams(-1, -2));
+        }
+
+        setBox.addView(sectionLabel(t("set_security")));
+        if (!decoy) {
+            setBox.addView(settingRow(t("pin_code"), tv(hasPin() ? t("pin_on") : t("pin_off"), 14, hasPin() ? ACCENT : MUTED, true)), new LinearLayout.LayoutParams(-1, -2));
+            LinearLayout pinRow = new LinearLayout(this);
+            if (!hasPin()) {
+                TextView set = primaryButton(t("pin_set"));
+                set.setOnClickListener(v -> setPinFlow());
+                pinRow.addView(set, new LinearLayout.LayoutParams(0, dp(46), 1));
+            } else {
+                TextView change = button(t("pin_change")), remove = button(t("pin_remove"));
+                remove.setTextColor(0xFFFFFFFF);
+                remove.setBackground(round(RED, 12));
+                change.setOnClickListener(v -> setPinFlow());
+                remove.setOnClickListener(v -> removePinFlow());
+                pinRow.addView(change, new LinearLayout.LayoutParams(0, dp(46), 1));
+                LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(0, dp(46), 1);
+                rp.setMarginStart(dp(8));
+                pinRow.addView(remove, rp);
+            }
+            setBox.addView(pinRow, new LinearLayout.LayoutParams(-1, -2));
+            TextView warn = tv(t("pin_warn"), 11.5f, MUTED, false);
+            warn.setPadding(0, dp(6), 0, dp(6));
+            setBox.addView(warn, new LinearLayout.LayoutParams(-1, -2));
+            if (hasPin()) {
+                setBox.addView(settingRow(t("decoy_pin"), tv(hasDecoy() ? t("pin_on") : t("pin_off"), 14, hasDecoy() ? ACCENT : MUTED, true)), new LinearLayout.LayoutParams(-1, -2));
+                LinearLayout dRow = new LinearLayout(this);
+                TextView dSet = hasDecoy() ? button(t("pin_change")) : primaryButton(t("decoy_set"));
+                dSet.setOnClickListener(v -> setDecoyFlow());
+                dRow.addView(dSet, new LinearLayout.LayoutParams(0, dp(46), 1));
+                if (hasDecoy()) {
+                    TextView dRm = button(t("pin_remove"));
+                    dRm.setTextColor(0xFFFFFFFF);
+                    dRm.setBackground(round(RED, 12));
+                    dRm.setOnClickListener(v -> { prefs.edit().remove("dpinhash").remove("dpinsalt").apply(); renderSettings(); });
+                    LinearLayout.LayoutParams drp = new LinearLayout.LayoutParams(0, dp(46), 1);
+                    drp.setMarginStart(dp(8));
+                    dRow.addView(dRm, drp);
+                }
+                setBox.addView(dRow, new LinearLayout.LayoutParams(-1, -2));
+                TextView dn = tv(t("decoy_note"), 11.5f, MUTED, false);
+                dn.setPadding(0, dp(6), 0, dp(6));
+                setBox.addView(dn, new LinearLayout.LayoutParams(-1, -2));
+            }
+        }
+        final TextView recentsChip = chip(prefs.getBoolean("hide_recents", false) ? t("on") : t("off"), prefs.getBoolean("hide_recents", false));
+        recentsChip.setOnClickListener(v -> { prefs.edit().putBoolean("hide_recents", !prefs.getBoolean("hide_recents", false)).apply(); renderSettings(); });
+        setBox.addView(settingRow(t("hide_recents"), recentsChip), new LinearLayout.LayoutParams(-1, -2));
+        final TextView shotsChip = chip(prefs.getBoolean("no_shots", false) ? t("on") : t("off"), prefs.getBoolean("no_shots", false));
+        shotsChip.setOnClickListener(v -> { prefs.edit().putBoolean("no_shots", !prefs.getBoolean("no_shots", false)).apply(); applySecure(); renderSettings(); });
+        setBox.addView(settingRow(t("no_shots"), shotsChip), new LinearLayout.LayoutParams(-1, -2));
+
+        setBox.addView(sectionLabel(t("set_library")));
+        TextView statsB = button(t("stats_btn"));
+        statsB.setOnClickListener(v -> openStats());
+        setBox.addView(statsB, params(-1, 48));
+        TextView dupB = button(t("dup_btn"));
+        dupB.setOnClickListener(v -> openDuplicates());
+        LinearLayout.LayoutParams dbp = params(-1, 48);
+        dbp.topMargin = dp(8);
+        setBox.addView(dupB, dbp);
 
         setBox.addView(sectionLabel(t("set_data")));
         TextView exp = button(t("export_all"));
@@ -2328,7 +3229,9 @@ public class MainActivity extends Activity {
         rs.setOnClickListener(v -> showDlg(dlg().setTitle(t("reset_settings")).setMessage(t("reset_msg"))
                 .setNegativeButton(t("cancel"), null)
                 .setPositiveButton(t("reset"), (d, w) -> {
-                    prefs.edit().remove("lang").remove("theme").remove("cols").remove("names").apply();
+                    prefs.edit().remove("lang").remove("theme").remove("cols").remove("names").remove("bgdim")
+                            .remove("no_shots").remove("hide_recents").remove("mmode").apply();
+                    bgFile().delete();
                     setIcon(0, true);
                     toast(t("reset_done"));
                     recreate();
@@ -2336,10 +3239,442 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams rsp = params(-1, 48);
         rsp.topMargin = dp(10);
         setBox.addView(rs, rsp);
-        TextView ver = tv("Offline Media Vault · v1.6", 11, MUTED, false);
+        TextView ver = tv("Offline Media Vault · v1.7", 11, MUTED, false);
         ver.setGravity(Gravity.CENTER);
         ver.setPadding(0, dp(18), 0, 0);
         setBox.addView(ver, new LinearLayout.LayoutParams(-1, -2));
+        fxTree(setBox);
+    }
+
+    // ---------- Дубликаты ----------
+    private void openDuplicates() {
+        final Dialog d = new Dialog(this, android.R.style.Theme_Black_NoTitleBar_Fullscreen);
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setBackgroundColor(BG);
+        root.setOnApplyWindowInsetsListener((v, insets) -> {
+            v.setPadding(insets.getSystemWindowInsetLeft(), insets.getSystemWindowInsetTop(), insets.getSystemWindowInsetRight(), insets.getSystemWindowInsetBottom());
+            return insets;
+        });
+        LinearLayout head = new LinearLayout(this);
+        head.setGravity(Gravity.CENTER_VERTICAL);
+        head.setPadding(dp(8), dp(10), dp(12), dp(4));
+        TextView close = tv("✕", 20, FG, true);
+        close.setGravity(Gravity.CENTER);
+        close.setOnClickListener(v -> d.dismiss());
+        head.addView(close, new LinearLayout.LayoutParams(dp(44), dp(44)));
+        TextView ttl = tv(t("dup_title"), 19, FG, true);
+        ttl.setPadding(dp(8), 0, 0, 0);
+        head.addView(ttl, new LinearLayout.LayoutParams(0, -2, 1));
+        root.addView(head, new LinearLayout.LayoutParams(-1, -2));
+        ScrollView sv = new ScrollView(this);
+        final LinearLayout body = new LinearLayout(this);
+        body.setOrientation(LinearLayout.VERTICAL);
+        body.setPadding(dp(16), dp(8), dp(16), dp(20));
+        sv.addView(body);
+        root.addView(sv, new LinearLayout.LayoutParams(-1, 0, 1));
+        TextView scanning = tv(t("dup_scanning"), 14, MUTED, false);
+        scanning.setGravity(Gravity.CENTER);
+        scanning.setPadding(0, dp(40), 0, dp(12));
+        body.addView(scanning, new LinearLayout.LayoutParams(-1, -2));
+        body.addView(new ProgressBar(this), new LinearLayout.LayoutParams(-1, dp(40)));
+        d.setContentView(root);
+        animWin(d, R.style.OmvSheetAnim);
+        openDialogs.add(d);
+        d.show();
+        pool.execute(() -> {
+            final ArrayList<ArrayList<Library.Item>> groups = lib.findDuplicates();
+            ui.post(() -> { if (d.isShowing()) renderDup(body, groups); });
+        });
+    }
+
+    private void renderDup(final LinearLayout body, final ArrayList<ArrayList<Library.Item>> groups) {
+        body.removeAllViews();
+        if (groups.isEmpty()) {
+            body.addView(emptyNote(t("dup_none")), params(-1, -2));
+            return;
+        }
+        long extra = 0;
+        int extraN = 0;
+        for (ArrayList<Library.Item> g : groups) {
+            for (int i = 1; i < g.size(); i++) { extra += new File(g.get(i).path).length(); extraN++; }
+        }
+        TextView sum = tv(tf("dup_summary", groups.size(), extraN, fmtSize(extra)), 14, FG, true);
+        sum.setPadding(0, dp(4), 0, dp(10));
+        body.addView(sum, new LinearLayout.LayoutParams(-1, -2));
+        TextView all = primaryButton(t("dup_trash_all"));
+        all.setBackground(round(RED, 24));
+        all.setTextColor(0xFFFFFFFF);
+        all.setOnClickListener(v -> {
+            int n = 0;
+            for (ArrayList<Library.Item> g : groups) for (int i = 1; i < g.size(); i++) { lib.moveToTrash(g.get(i)); n++; }
+            lib.save();
+            groups.clear();
+            refreshAll();
+            toast(tf("moved_trash", n));
+            renderDup(body, groups);
+        });
+        LinearLayout.LayoutParams alp = new LinearLayout.LayoutParams(-1, dp(48));
+        alp.bottomMargin = dp(12);
+        body.addView(all, alp);
+        int k = 0;
+        for (final ArrayList<Library.Item> g : new ArrayList<>(groups)) {
+            k++;
+            LinearLayout card = card();
+            card.addView(cardTitle(tf("dup_group", k, g.size(), fmtSize(new File(g.get(0).path).length()))));
+            for (int i = 0; i < g.size(); i++) {
+                Library.Item it = g.get(i);
+                LinearLayout row = new LinearLayout(this);
+                row.setGravity(Gravity.CENTER_VERTICAL);
+                row.addView(makeThumb(it), new LinearLayout.LayoutParams(dp(56), dp(56)));
+                LinearLayout tx = new LinearLayout(this);
+                tx.setOrientation(LinearLayout.VERTICAL);
+                tx.setPadding(dp(10), 0, 0, 0);
+                TextView nm = tv(it.name, 13, FG, true);
+                nm.setSingleLine(true);
+                nm.setEllipsize(TextUtils.TruncateAt.END);
+                tx.addView(nm);
+                tx.addView(tv((i == 0 ? t("dup_keep") + " · " : "") + DateFormat.getDateInstance(DateFormat.MEDIUM, new Locale(lang)).format(new Date(it.added)), 11.5f, i == 0 ? ACCENT : MUTED, false));
+                row.addView(tx, new LinearLayout.LayoutParams(0, -2, 1));
+                LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(-1, -2);
+                rp.bottomMargin = dp(8);
+                card.addView(row, rp);
+            }
+            TextView one = button(t("dup_trash_group"));
+            one.setBackground(round(BTN, 20));
+            one.setOnClickListener(v -> {
+                for (int i = 1; i < g.size(); i++) lib.moveToTrash(g.get(i));
+                lib.save();
+                groups.remove(g);
+                refreshAll();
+                toast(tf("moved_trash", g.size() - 1));
+                renderDup(body, groups);
+            });
+            card.addView(one, new LinearLayout.LayoutParams(-1, dp(42)));
+            addCard(body, card);
+        }
+        fxTree(body);
+    }
+
+    // ---------- Статистика ----------
+    private static long dirSize(File f) {
+        if (f == null || !f.exists()) return 0;
+        if (f.isFile()) return f.length();
+        long n = 0;
+        File[] fs = f.listFiles();
+        if (fs != null) for (File x : fs) n += dirSize(x);
+        return n;
+    }
+
+    private LinearLayout statRow(String label, String value) {
+        LinearLayout r = new LinearLayout(this);
+        r.setGravity(Gravity.CENTER_VERTICAL);
+        r.setPadding(0, dp(4), 0, dp(4));
+        r.addView(tv(label, 13.5f, MUTED, false), new LinearLayout.LayoutParams(0, -2, 1));
+        TextView v = tv(value, 13.5f, FG, true);
+        v.setGravity(Gravity.END);
+        v.setPadding(dp(10), 0, 0, 0);
+        r.addView(v, new LinearLayout.LayoutParams(-2, -2));
+        return r;
+    }
+
+    private LinearLayout barRow(String label, double frac, String value, int color) {
+        LinearLayout r = new LinearLayout(this);
+        r.setGravity(Gravity.CENTER_VERTICAL);
+        r.setPadding(0, dp(4), 0, dp(4));
+        TextView lb = tv(label, 12.5f, FG, false);
+        lb.setSingleLine(true);
+        lb.setEllipsize(TextUtils.TruncateAt.END);
+        r.addView(lb, new LinearLayout.LayoutParams(dp(92), -2));
+        LinearLayout track = new LinearLayout(this);
+        track.setBackground(round(FIELD, 6));
+        float f = (float) Math.max(0.02, Math.min(1.0, frac));
+        View fill = new View(this);
+        fill.setBackground(round(color, 6));
+        track.addView(fill, new LinearLayout.LayoutParams(0, dp(10), f));
+        track.addView(new View(this), new LinearLayout.LayoutParams(0, dp(10), 1f - f));
+        LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(0, dp(10), 1);
+        tp.setMarginStart(dp(6));
+        r.addView(track, tp);
+        TextView vt = tv(value, 12, MUTED, true);
+        vt.setGravity(Gravity.END);
+        vt.setPadding(dp(8), 0, 0, 0);
+        r.addView(vt, new LinearLayout.LayoutParams(-2, -2));
+        return r;
+    }
+
+    private void openStats() {
+        final Dialog d = new Dialog(this, android.R.style.Theme_Black_NoTitleBar_Fullscreen);
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setBackgroundColor(BG);
+        root.setOnApplyWindowInsetsListener((v, insets) -> {
+            v.setPadding(insets.getSystemWindowInsetLeft(), insets.getSystemWindowInsetTop(), insets.getSystemWindowInsetRight(), insets.getSystemWindowInsetBottom());
+            return insets;
+        });
+        LinearLayout head = new LinearLayout(this);
+        head.setGravity(Gravity.CENTER_VERTICAL);
+        head.setPadding(dp(8), dp(10), dp(12), dp(4));
+        TextView close = tv("✕", 20, FG, true);
+        close.setGravity(Gravity.CENTER);
+        close.setOnClickListener(v -> d.dismiss());
+        head.addView(close, new LinearLayout.LayoutParams(dp(44), dp(44)));
+        TextView ttl = tv(t("stats_title"), 19, FG, true);
+        ttl.setPadding(dp(8), 0, 0, 0);
+        head.addView(ttl, new LinearLayout.LayoutParams(0, -2, 1));
+        root.addView(head, new LinearLayout.LayoutParams(-1, -2));
+        ScrollView sv = new ScrollView(this);
+        final LinearLayout body = new LinearLayout(this);
+        body.setOrientation(LinearLayout.VERTICAL);
+        body.setPadding(dp(16), dp(8), dp(16), dp(24));
+        sv.addView(body);
+        root.addView(sv, new LinearLayout.LayoutParams(-1, 0, 1));
+        body.addView(new ProgressBar(this), new LinearLayout.LayoutParams(-1, dp(60)));
+        d.setContentView(root);
+        animWin(d, R.style.OmvSheetAnim);
+        openDialogs.add(d);
+        d.show();
+        pool.execute(() -> {
+            final ArrayList<Library.Item> all;
+            synchronized (lib) { all = new ArrayList<>(lib.items); }
+            final ArrayList<Library.Album> albs = new ArrayList<>(lib.albums);
+            final long[] sz = new long[all.size()];
+            for (int i = 0; i < all.size(); i++) sz[i] = new File(all.get(i).path).length();
+            final long appData = dirSize(getFilesDir()) + dirSize(getCacheDir());
+            final long libJson = lib.dataFile.length();
+            long fr = 0, tot = 0;
+            try { StatFs sf = new StatFs(getFilesDir().getPath()); fr = sf.getAvailableBytes(); tot = sf.getTotalBytes(); } catch (Exception ignored) { }
+            final long free = fr, total = tot;
+            ui.post(() -> { if (d.isShowing()) renderStats(body, all, sz, albs, appData, libJson, free, total); });
+        });
+    }
+
+    private void renderStats(LinearLayout body, ArrayList<Library.Item> all, long[] sz, ArrayList<Library.Album> albs,
+                             long appData, long libJson, long free, long total) {
+        body.removeAllViews();
+        int photos = 0, videos = 0, manga = 0, trashN = 0, favN = 0, noAlbum = 0, multiAlb = 0, untagged = 0, tagAssign = 0, activeN = 0;
+        long photoB = 0, videoB = 0, mangaB = 0, trashB = 0, activeB = 0;
+        long largest = -1, smallest = Long.MAX_VALUE, first = Long.MAX_VALUE, last = 0;
+        String largestName = "", smallestName = "", firstName = "", lastName = "";
+        int[] weekday = new int[7];
+        TreeMap<String, Integer> monthMap = new TreeMap<>();
+        TreeMap<String, Integer> tagCount = new TreeMap<>();
+        HashMap<String, Integer> extN = new HashMap<>();
+        HashMap<String, Long> extB = new HashMap<>();
+        HashMap<String, Integer> albCount = new HashMap<>();
+        java.util.Calendar cal = java.util.Calendar.getInstance();
+        SimpleDateFormat mf = new SimpleDateFormat("yyyy-MM", Locale.ROOT);
+        long oldestTrash = Long.MAX_VALUE;
+        for (int i = 0; i < all.size(); i++) {
+            Library.Item it = all.get(i);
+            long b = sz[i];
+            if (it.trashed) { trashN++; trashB += b; if (it.trashedAt > 0) oldestTrash = Math.min(oldestTrash, it.trashedAt); continue; }
+            activeN++;
+            activeB += b;
+            if (Library.isPdf(it.name)) { manga++; mangaB += b; } else if (Library.isVideo(it.name)) { videos++; videoB += b; } else { photos++; photoB += b; }
+            if (it.fav) favN++;
+            if (b > largest) { largest = b; largestName = it.name; }
+            if (b < smallest) { smallest = b; smallestName = it.name; }
+            if (it.added < first) { first = it.added; firstName = it.name; }
+            if (it.added > last) { last = it.added; lastName = it.name; }
+            cal.setTimeInMillis(it.added);
+            weekday[cal.get(java.util.Calendar.DAY_OF_WEEK) - 1]++;
+            String mk = mf.format(new Date(it.added));
+            Integer mv = monthMap.get(mk);
+            monthMap.put(mk, mv == null ? 1 : mv + 1);
+            List<String> ts = Library.tagsOf(it);
+            if (ts.isEmpty()) untagged++;
+            tagAssign += ts.size();
+            for (String tg : ts) { Integer c = tagCount.get(tg); tagCount.put(tg, c == null ? 1 : c + 1); }
+            List<String> ai = Library.albumIdsOf(it);
+            int valid = 0;
+            for (String aid : ai) { if (lib.albumById(aid) != null) { valid++; Integer c = albCount.get(aid); albCount.put(aid, c == null ? 1 : c + 1); } }
+            if (valid == 0) noAlbum++;
+            if (valid > 1) multiAlb++;
+            int dot = it.file.lastIndexOf('.');
+            String ext = dot >= 0 ? it.file.substring(dot + 1).toLowerCase(Locale.ROOT) : "?";
+            Integer en = extN.get(ext); extN.put(ext, en == null ? 1 : en + 1);
+            Long eb = extB.get(ext); extB.put(ext, (eb == null ? 0 : eb) + b);
+        }
+        DateFormat df = DateFormat.getDateInstance(DateFormat.MEDIUM, new Locale(lang));
+        int BAR2 = 0xFFE8527E;
+
+        LinearLayout c1 = card();
+        c1.addView(cardTitle(t("st_overview")));
+        c1.addView(statRow(t("st_files"), String.valueOf(activeN)));
+        c1.addView(statRow(t("st_size"), fmtSize(activeB)));
+        c1.addView(statRow(t("st_avg"), activeN > 0 ? fmtSize(activeB / activeN) : "—"));
+        long mx = Math.max(1, Math.max(photoB, Math.max(videoB, mangaB)));
+        c1.addView(barRow(t("kind_photo"), photoB / (double) mx, photos + " · " + fmtSize(photoB), ACCENT));
+        c1.addView(barRow(t("kind_video"), videoB / (double) mx, videos + " · " + fmtSize(videoB), BAR2));
+        c1.addView(barRow(t("kind_manga"), mangaB / (double) mx, manga + " · " + fmtSize(mangaB), TAG_GREEN));
+        addCard(body, c1);
+
+        LinearLayout c2 = card();
+        c2.addView(cardTitle(t("st_storage")));
+        c2.addView(statRow(t("st_media"), fmtSize(activeB)));
+        c2.addView(statRow(t("st_trash"), trashN + " · " + fmtSize(trashB)));
+        if (oldestTrash != Long.MAX_VALUE) c2.addView(statRow(t("st_trash_old"), df.format(new Date(oldestTrash))));
+        c2.addView(statRow(t("st_appdata"), fmtSize(appData)));
+        c2.addView(statRow(t("st_libfile"), fmtSize(libJson)));
+        if (total > 0) {
+            c2.addView(statRow(t("st_dev_free"), fmtSize(free) + " / " + fmtSize(total)));
+            c2.addView(barRow(t("st_dev_used"), (total - free) / (double) total, Math.round((total - free) * 100.0 / total) + "%", ACCENT));
+            c2.addView(barRow(t("st_app_share"), appData / (double) total, String.format(Locale.ROOT, "%.2f%%", appData * 100.0 / total), BAR2));
+        }
+        addCard(body, c2);
+
+        if (activeN > 0) {
+            LinearLayout c3 = card();
+            c3.addView(cardTitle(t("st_records")));
+            c3.addView(statRow(t("st_largest"), largestName + " · " + fmtSize(largest)));
+            c3.addView(statRow(t("st_smallest"), smallestName + " · " + fmtSize(smallest)));
+            c3.addView(statRow(t("st_first"), df.format(new Date(first)) + " · " + firstName));
+            c3.addView(statRow(t("st_last"), df.format(new Date(last)) + " · " + lastName));
+            long span = Math.max(1, (last - first) / 86400000L + 1);
+            c3.addView(statRow(t("st_span"), tf("st_days", span)));
+            c3.addView(statRow(t("st_per_day"), String.format(Locale.ROOT, "%.2f", activeN / (double) span)));
+            addCard(body, c3);
+
+            LinearLayout c4 = card();
+            c4.addView(cardTitle(t("st_by_month")));
+            ArrayList<String> keys = new ArrayList<>(monthMap.keySet());
+            int from = Math.max(0, keys.size() - 12);
+            int mmax = 1;
+            for (int i = from; i < keys.size(); i++) mmax = Math.max(mmax, monthMap.get(keys.get(i)));
+            for (int i = from; i < keys.size(); i++) c4.addView(barRow(keys.get(i), monthMap.get(keys.get(i)) / (double) mmax, String.valueOf(monthMap.get(keys.get(i))), ACCENT));
+            addCard(body, c4);
+
+            LinearLayout c5 = card();
+            c5.addView(cardTitle(t("st_by_weekday")));
+            String[] wd = new java.text.DateFormatSymbols(new Locale(lang)).getShortWeekdays();
+            int wmax = 1;
+            for (int n : weekday) wmax = Math.max(wmax, n);
+            for (int i = 0; i < 7; i++) c5.addView(barRow(wd[i + 1], weekday[i] / (double) wmax, String.valueOf(weekday[i]), BAR2));
+            addCard(body, c5);
+        }
+
+        LinearLayout c6 = card();
+        c6.addView(cardTitle(t("st_tags")));
+        c6.addView(statRow(t("st_tags_unique"), String.valueOf(tagCount.size())));
+        c6.addView(statRow(t("st_tags_assign"), String.valueOf(tagAssign)));
+        c6.addView(statRow(t("st_tags_avg"), activeN > 0 ? String.format(Locale.ROOT, "%.2f", tagAssign / (double) activeN) : "—"));
+        c6.addView(statRow(t("st_untagged"), untagged + (activeN > 0 ? " (" + Math.round(untagged * 100.0 / activeN) + "%)" : "")));
+        ArrayList<Map.Entry<String, Integer>> te = new ArrayList<>(tagCount.entrySet());
+        Collections.sort(te, (x, y) -> y.getValue() - x.getValue());
+        if (!te.isEmpty()) {
+            TextView top = tv(t("st_tags_top"), 12, MUTED, true);
+            top.setPadding(0, dp(8), 0, dp(4));
+            c6.addView(top);
+            int tmax = te.get(0).getValue();
+            for (int i = 0; i < Math.min(10, te.size()); i++) c6.addView(barRow(te.get(i).getKey(), te.get(i).getValue() / (double) tmax, String.valueOf(te.get(i).getValue()), TAG_GREEN));
+        }
+        addCard(body, c6);
+
+        LinearLayout c7 = card();
+        c7.addView(cardTitle(t("st_albums")));
+        c7.addView(statRow(t("st_albums_n"), String.valueOf(albs.size())));
+        c7.addView(statRow(t("favorites"), String.valueOf(favN)));
+        c7.addView(statRow(t("st_no_album"), String.valueOf(noAlbum)));
+        c7.addView(statRow(t("st_multi_album"), String.valueOf(multiAlb)));
+        ArrayList<Library.Album> sortedAlb = new ArrayList<>(albs);
+        final HashMap<String, Integer> acf = albCount;
+        Collections.sort(sortedAlb, (x, y) -> {
+            Integer ix = acf.get(x.id), iy = acf.get(y.id);
+            return (iy == null ? 0 : iy) - (ix == null ? 0 : ix);
+        });
+        if (!sortedAlb.isEmpty()) {
+            Integer f0 = acf.get(sortedAlb.get(0).id);
+            int amax = Math.max(1, f0 == null ? 1 : f0);
+            for (int i = 0; i < Math.min(6, sortedAlb.size()); i++) {
+                Integer cc = acf.get(sortedAlb.get(i).id);
+                int cn = cc == null ? 0 : cc;
+                c7.addView(barRow(sortedAlb.get(i).name, cn / (double) amax, String.valueOf(cn), ACCENT));
+            }
+        }
+        addCard(body, c7);
+
+        LinearLayout c8 = card();
+        c8.addView(cardTitle(t("st_types")));
+        ArrayList<Map.Entry<String, Integer>> ee = new ArrayList<>(extN.entrySet());
+        Collections.sort(ee, (x, y) -> y.getValue() - x.getValue());
+        for (int i = 0; i < Math.min(8, ee.size()); i++) {
+            Map.Entry<String, Integer> e = ee.get(i);
+            c8.addView(statRow("." + e.getKey(), e.getValue() + " · " + fmtSize(extB.get(e.getKey()))));
+        }
+        addCard(body, c8);
+
+        // подробности, которые считаются дольше (длительность видео, разрешение фото, страницы манги)
+        LinearLayout c9 = card();
+        c9.addView(cardTitle(t("st_details")));
+        final TextView vDur = tv("…", 13.5f, FG, true), vAvg = tv("…", 13.5f, FG, true), vLong = tv("…", 13.5f, FG, true);
+        final TextView pRes = tv("…", 13.5f, FG, true), pMp = tv("…", 13.5f, FG, true), mPages = tv("…", 13.5f, FG, true);
+        for (TextView v : new TextView[]{vDur, vAvg, vLong, pRes, pMp, mPages}) v.setGravity(Gravity.END);
+        String[] dl = {t("st_vid_total"), t("st_vid_avg"), t("st_vid_long"), t("st_ph_maxres"), t("st_ph_mp"), t("st_manga_pages")};
+        TextView[] dv = {vDur, vAvg, vLong, pRes, pMp, mPages};
+        for (int i = 0; i < dl.length; i++) {
+            LinearLayout r = new LinearLayout(this);
+            r.setGravity(Gravity.CENTER_VERTICAL);
+            r.setPadding(0, dp(4), 0, dp(4));
+            r.addView(tv(dl[i], 13.5f, MUTED, false), new LinearLayout.LayoutParams(0, -2, 1));
+            r.addView(dv[i], new LinearLayout.LayoutParams(-2, -2));
+            c9.addView(r);
+        }
+        addCard(body, c9);
+
+        LinearLayout c10 = card();
+        c10.addView(cardTitle(t("st_app")));
+        c10.addView(statRow(t("st_version"), "v1.7"));
+        c10.addView(statRow(t("st_pin"), hasPin() ? t("pin_on") : t("pin_off")));
+        c10.addView(statRow(t("st_theme"), prefs.getString("theme", "system")));
+        c10.addView(statRow(t("set_columns"), String.valueOf(cols)));
+        c10.addView(statRow(t("st_thumbs"), String.valueOf(thumbCache.size())));
+        addCard(body, c10);
+        fxTree(body);
+
+        final ArrayList<Library.Item> act = new ArrayList<>();
+        for (Library.Item it : all) if (!it.trashed) act.add(it);
+        pool.execute(() -> {
+            long durTotal = 0, durMax = 0;
+            int vn = 0;
+            long maxPix = 0;
+            String maxRes = "—";
+            double mp = 0;
+            int pages = 0;
+            for (Library.Item it : act) {
+                File f = new File(it.path);
+                if (Library.isVideo(it.name)) {
+                    MediaMetadataRetriever mr = new MediaMetadataRetriever();
+                    try {
+                        mr.setDataSource(f.getAbsolutePath());
+                        String ds = mr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);
+                        long dur = ds == null ? 0 : Long.parseLong(ds);
+                        durTotal += dur; durMax = Math.max(durMax, dur); vn++;
+                    } catch (Exception ignored) { } finally { try { mr.release(); } catch (Exception ignored) { } }
+                } else if (Library.isPdf(it.name)) {
+                    try (ParcelFileDescriptor pfd = ParcelFileDescriptor.open(f, ParcelFileDescriptor.MODE_READ_ONLY)) {
+                        PdfRenderer r = new PdfRenderer(pfd);
+                        pages += r.getPageCount();
+                        r.close();
+                    } catch (Throwable ignored) { }
+                } else {
+                    BitmapFactory.Options o = new BitmapFactory.Options();
+                    o.inJustDecodeBounds = true;
+                    BitmapFactory.decodeFile(f.getAbsolutePath(), o);
+                    if (o.outWidth > 0 && o.outHeight > 0) {
+                        long px = (long) o.outWidth * o.outHeight;
+                        mp += px / 1_000_000.0;
+                        if (px > maxPix) { maxPix = px; maxRes = o.outWidth + "×" + o.outHeight; }
+                    }
+                }
+            }
+            final String sDur = vn > 0 ? fmtDur(durTotal) : "—", sAvg = vn > 0 ? fmtDur(durTotal / vn) : "—", sLong = vn > 0 ? fmtDur(durMax) : "—";
+            final String sRes = maxRes, sMp = String.format(Locale.ROOT, "%.1f MP", mp), sPg = String.valueOf(pages);
+            ui.post(() -> {
+                vDur.setText(sDur); vAvg.setText(sAvg); vLong.setText(sLong);
+                pRes.setText(sRes); pMp.setText(sMp); mPages.setText(sPg);
+            });
+        });
     }
 
     // Двойное подтверждение: «Уверен?» -> «Точно уверен?»
@@ -2453,6 +3788,8 @@ public class MainActivity extends Activity {
             importZip(data.getData(), getName(data.getData()));
         } else if (requestCode == EXPORT_ZIP && data.getData() != null) {
             exportAll(data.getData());
+        } else if (requestCode == PICK_BG && data.getData() != null) {
+            setBgFrom(data.getData());
         }
     }
 
@@ -2538,6 +3875,7 @@ public class MainActivity extends Activity {
                             Library.Item it = lib.addItem(mm != null && !mm.name.isEmpty() ? mm.name : base, out);
                             if (mm != null) {
                                 it.tags = mm.tags;
+                                it.fav = mm.fav;
                                 if (mm.added > 0) it.added = mm.added;
                                 for (String oa : mm.album.split(",")) {
                                     String na = amap.get(oa.trim());
