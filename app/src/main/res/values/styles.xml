@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="OmvPopAnim" parent="@android:style/Animation.Dialog">
+        <item name="android:windowEnterAnimation">@anim/omv_pop_in</item>
+        <item name="android:windowExitAnimation">@anim/omv_pop_out</item>
+    </style>
+    <style name="OmvSheetAnim" parent="@android:style/Animation.Dialog">
+        <item name="android:windowEnterAnimation">@anim/omv_sheet_in</item>
+        <item name="android:windowExitAnimation">@anim/omv_sheet_out</item>
+    </style>
+    <style name="OmvFadeAnim" parent="@android:style/Animation.Dialog">
+        <item name="android:windowEnterAnimation">@anim/omv_fade_in</item>
+        <item name="android:windowExitAnimation">@anim/omv_fade_out</item>
+    </style>
+</resources>
