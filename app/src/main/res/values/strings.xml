@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="shortcut_upload">Upload</string>
+    <string name="shortcut_upload_long">Upload files</string>
+    <string name="shortcut_fav">Favorites</string>
+    <string name="shortcut_fav_long">Open favorites</string>
+</resources>
