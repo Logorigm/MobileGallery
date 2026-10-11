@@ -15,7 +15,9 @@ import android.graphics.Matrix;
 import android.graphics.Outline;
 import android.graphics.Paint;
 import android.graphics.Path;
+import android.graphics.Rect;
 import android.graphics.Typeface;
+import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.pdf.PdfRenderer;
 import android.media.MediaMetadataRetriever;
@@ -34,6 +36,8 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewOutlineProvider;
+import android.view.Window;
+import android.view.WindowManager;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
@@ -54,6 +58,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.security.MessageDigest;
+import java.text.DateFormat;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -73,6 +78,7 @@ import java.util.zip.ZipOutputStream;
 
 public class MainActivity extends Activity {
     interface StrCb { void on(String s); }
+    interface IntCb { void on(int i); }
 
     static class Thumb { Bitmap bmp; long dur; int pages; }
     static class PdfHolder { PdfRenderer r; ParcelFileDescriptor pfd; int pages = 0, page = 0; }
@@ -109,31 +115,44 @@ public class MainActivity extends Activity {
         }
     }
 
-    /** Контейнер, переносящий чипы на новую строку (с учётом RTL). */
+    /** Контейнер, переносящий чипы на новую строку (с учётом RTL); число строк можно ограничить. */
     static class Flow extends ViewGroup {
         final int hGap, vGap;
+        int maxRows = Integer.MAX_VALUE;
         Flow(Context c, int h, int v) { super(c); hGap = h; vGap = v; }
+        Flow rows(int n) { maxRows = n; return this; }
         @Override protected void onMeasure(int wSpec, int hSpec) {
-            int maxW = MeasureSpec.getSize(wSpec), x = 0, y = 0, rowH = 0;
+            int maxW = MeasureSpec.getSize(wSpec), x = 0, y = 0, rowH = 0, row = 0;
             for (int i = 0; i < getChildCount(); i++) {
                 View c = getChildAt(i);
                 if (c.getVisibility() == GONE) continue;
                 c.measure(MeasureSpec.makeMeasureSpec(maxW, MeasureSpec.AT_MOST), MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED));
                 int w = c.getMeasuredWidth(), h = c.getMeasuredHeight();
-                if (x > 0 && x + w > maxW) { x = 0; y += rowH + vGap; rowH = 0; }
+                if (x > 0 && x + w > maxW) {
+                    row++;
+                    if (row >= maxRows) break;
+                    x = 0; y += rowH + vGap; rowH = 0;
+                }
                 x += w + hGap;
                 rowH = Math.max(rowH, h);
             }
-            setMeasuredDimension(maxW, y + rowH);
+            int hh = MeasureSpec.getMode(hSpec) == MeasureSpec.EXACTLY ? MeasureSpec.getSize(hSpec) : y + rowH;
+            setMeasuredDimension(maxW, hh);
         }
         @Override protected void onLayout(boolean changed, int l, int t, int r, int b) {
-            int maxW = r - l, x = 0, y = 0, rowH = 0;
+            int maxW = r - l, x = 0, y = 0, rowH = 0, row = 0;
+            boolean over = false;
             boolean rtl = getLayoutDirection() == View.LAYOUT_DIRECTION_RTL;
             for (int i = 0; i < getChildCount(); i++) {
                 View c = getChildAt(i);
                 if (c.getVisibility() == GONE) continue;
+                if (over) { c.layout(0, 0, 0, 0); continue; }
                 int w = c.getMeasuredWidth(), h = c.getMeasuredHeight();
-                if (x > 0 && x + w > maxW) { x = 0; y += rowH + vGap; rowH = 0; }
+                if (x > 0 && x + w > maxW) {
+                    row++;
+                    if (row >= maxRows) { over = true; c.layout(0, 0, 0, 0); continue; }
+                    x = 0; y += rowH + vGap; rowH = 0;
+                }
                 if (rtl) c.layout(maxW - x - w, y, maxW - x, y + h); else c.layout(x, y, x + w, y + h);
                 x += w + hGap;
                 rowH = Math.max(rowH, h);
@@ -238,6 +257,7 @@ public class MainActivity extends Activity {
     @Override public void onBackPressed() {
         if (lockView != null && lockView.getVisibility() == View.VISIBLE) { moveTaskToBack(true); return; }
         if (!sel.isEmpty()) { sel.clear(); renderUpload(); return; }
+        if (curTab == 1 && (!albumSelA.isEmpty() || !albumSelI.isEmpty())) { albumSelCancel(); return; }
         if (curTab == 1 && albumOpen != null) { albumOpen = null; renderAlbums(); return; }
         super.onBackPressed();
     }
@@ -330,6 +350,40 @@ public class MainActivity extends Activity {
         c.setPadding(dp(14), dp(8), dp(14), dp(8));
         c.setBackground(round(on ? onColor : FIELD, 18));
         return c;
+    }
+
+    // Цветные «таблетки»-теги: цвет стабильно выбирается по тексту тега
+    private static final int[] PILL = {0xFFB3195F, 0xFF2E7D32, 0xFFB5202E, 0xFF00796B, 0xFF3949AB, 0xFF6A1B9A, 0xFFC25E00, 0xFF1565C0};
+
+    private int pillColor(String tag) {
+        int h = 0;
+        for (int i = 0; i < tag.length(); i++) h = h * 31 + tag.charAt(i);
+        return PILL[(h & 0x7fffffff) % PILL.length];
+    }
+
+    private TextView tagPill(String tag, boolean small) {
+        TextView p = tv(tag, small ? 10.5f : 13, 0xFFFFFFFF, false);
+        p.setSingleLine(true);
+        p.setEllipsize(TextUtils.TruncateAt.END);
+        p.setPadding(dp(small ? 8 : 13), dp(small ? 3 : 7), dp(small ? 8 : 13), dp(small ? 3 : 7));
+        p.setBackground(round(pillColor(tag), 20));
+        return p;
+    }
+
+    private LinearLayout segmented(String[] labels, int selected, final IntCb cb) {
+        LinearLayout row = new LinearLayout(this);
+        row.setBackground(round(FIELD, 24));
+        row.setPadding(dp(4), dp(4), dp(4), dp(4));
+        for (int i = 0; i < labels.length; i++) {
+            final int k = i;
+            TextView b = tv(labels[i], 13, i == selected ? ONACC : FG, true);
+            b.setGravity(Gravity.CENTER);
+            b.setPadding(dp(8), dp(10), dp(8), dp(10));
+            if (i == selected) b.setBackground(round(ACCENT, 20));
+            b.setOnClickListener(v -> cb.on(k));
+            row.addView(b, new LinearLayout.LayoutParams(0, -2, 1));
+        }
+        return row;
     }
 
     private void styleEdit(EditText e) {
@@ -563,10 +617,28 @@ public class MainActivity extends Activity {
     }
 
     // ---------- Сетка (лента и альбомы) ----------
-    private View makeCell(final Library.Item it, int cw, int thumbH, int tagLines, final ArrayList<Library.Item> list, final int idx) {
+    private int tagBodyH(int lines) { return lines * dp(22) + (lines - 1) * dp(4); }
+
+    private View makeCell(final Library.Item it, int cw, int thumbH, int tagLines, final ArrayList<Library.Item> list, final int idx,
+                          final LinkedHashSet<String> selection, final Runnable onSel) {
         LinearLayout cell = new LinearLayout(this);
         cell.setOrientation(LinearLayout.VERTICAL);
-        cell.addView(makeThumb(it), new LinearLayout.LayoutParams(cw, thumbH));
+        FrameLayout th = makeThumb(it);
+        if (selection != null && selection.contains(it.id)) {
+            View tint = new View(this);
+            tint.setBackground(round((ACCENT & 0x00FFFFFF) | 0x77000000, 10));
+            th.addView(tint, new FrameLayout.LayoutParams(-1, -1));
+            TextView ck = tv("✓", 14, ONACC, true);
+            ck.setGravity(Gravity.CENTER);
+            GradientDrawable og = new GradientDrawable();
+            og.setShape(GradientDrawable.OVAL);
+            og.setColor(ACCENT);
+            ck.setBackground(og);
+            FrameLayout.LayoutParams ckp = new FrameLayout.LayoutParams(dp(26), dp(26), Gravity.TOP | Gravity.START);
+            ckp.setMargins(dp(6), dp(6), 0, 0);
+            th.addView(ck, ckp);
+        }
+        cell.addView(th, new LinearLayout.LayoutParams(cw, thumbH));
         if (showNames) {
             TextView n = tv(it.name, 11, FG, true);
             n.setSingleLine(true);
@@ -574,17 +646,28 @@ public class MainActivity extends Activity {
             n.setPadding(dp(2), dp(3), dp(2), 0);
             cell.addView(n, new LinearLayout.LayoutParams(-1, -2));
         }
-        List<String> ts = Library.tagsOf(it);
-        TextView tg = tv(ts.isEmpty() ? "" : "#" + TextUtils.join(" #", ts), 10.5f, MUTED, false);
-        tg.setLines(tagLines);
-        tg.setEllipsize(TextUtils.TruncateAt.END);
-        tg.setPadding(dp(2), dp(1), dp(2), 0);
-        cell.addView(tg, new LinearLayout.LayoutParams(-1, -2));
-        cell.setOnClickListener(v -> openViewer(list, idx));
+        Flow tg = new Flow(this, dp(4), dp(4)).rows(tagLines);
+        for (String s : Library.tagsOf(it)) tg.addView(tagPill(s, true));
+        LinearLayout.LayoutParams tgp = new LinearLayout.LayoutParams(-1, tagBodyH(tagLines));
+        tgp.topMargin = dp(4);
+        cell.addView(tg, tgp);
+        cell.setOnClickListener(v -> {
+            if (selection != null && !selection.isEmpty()) {
+                if (!selection.remove(it.id)) selection.add(it.id);
+                onSel.run();
+            } else openViewer(list, idx);
+        });
+        if (selection != null) {
+            cell.setOnLongClickListener(v -> {
+                if (!selection.remove(it.id)) selection.add(it.id);
+                onSel.run();
+                return true;
+            });
+        }
         return cell;
     }
 
-    private void fillGrid(LinearLayout grid, ScrollView sv, final ArrayList<Library.Item> list) {
+    private void fillGrid(LinearLayout grid, ScrollView sv, final ArrayList<Library.Item> list, LinkedHashSet<String> selection, Runnable onSel) {
         grid.removeAllViews();
         int sw = sv.getWidth();
         if (sw <= 0) sw = getResources().getDisplayMetrics().widthPixels;
@@ -593,7 +676,7 @@ public class MainActivity extends Activity {
         int gap = dp(8);
         int cw = Math.max(dp(40), (sw - dp(24) - gap * (cols - 1)) / cols);
         int tagLines = cols >= 3 ? 1 : 2;
-        int labelH = dp(4) + (showNames ? dp(20) : 0) + dp(14) * tagLines;
+        int labelH = (showNames ? dp(20) : 0) + tagBodyH(tagLines) + dp(4);
         int cellH = cols <= 2 ? Math.max(dp(150), (vh - dp(8) - gap * 2) / 3) : (int) (cw * 1.3f) + labelH;
         int thumbH = Math.max(dp(70), cellH - labelH);
         LinearLayout row = null;
@@ -605,7 +688,7 @@ public class MainActivity extends Activity {
                 rp.bottomMargin = gap;
                 grid.addView(row, rp);
             }
-            View cell = makeCell(list.get(i), cw, thumbH, tagLines, list, i);
+            View cell = makeCell(list.get(i), cw, thumbH, tagLines, list, i, selection, onSel);
             LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(cw, -2);
             if (i % cols != 0) cp.setMarginStart(gap);
             row.addView(cell, cp);
@@ -699,39 +782,122 @@ public class MainActivity extends Activity {
             feedGrid.addView(emptyNote(lib.active().isEmpty() ? t("empty_all") : t("empty_filter")), params(-1, -2));
             return;
         }
-        fillGrid(feedGrid, feedScroll, list);
+        fillGrid(feedGrid, feedScroll, list, null, null);
     }
 
-    // ---------- Фильтр ленты ----------
+    // ---------- Фильтр ленты (нижняя шторка) ----------
+    private LinearLayout card() {
+        LinearLayout c = new LinearLayout(this);
+        c.setOrientation(LinearLayout.VERTICAL);
+        c.setPadding(dp(14), dp(12), dp(14), dp(14));
+        c.setBackground(round(PANEL, 20));
+        return c;
+    }
+
+    private void addCard(LinearLayout parent, LinearLayout c) {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
+        lp.bottomMargin = dp(10);
+        parent.addView(c, lp);
+    }
+
+    private TextView cardTitle(String s) {
+        TextView l = tv(s, 12, MUTED, true);
+        l.setPadding(dp(2), 0, 0, dp(10));
+        return l;
+    }
+
+    private TextView filterChip(String tag, int count, boolean on, boolean black) {
+        int col = black ? RED : pillColor(tag);
+        String label = (on ? (black ? "✕ " : "✓ ") : "") + tag + (count > 0 ? "  " + count : "");
+        TextView c = tv(label, 13, on ? 0xFFFFFFFF : FG, on);
+        c.setPadding(dp(14), dp(8), dp(14), dp(8));
+        c.setBackground(round(on ? col : blend(PANEL, col, 0.30f), 20));
+        return c;
+    }
+
     private void openFilter() {
         final LinkedHashSet<String> inc = new LinkedHashSet<>(incTags), exc = new LinkedHashSet<>(excTags);
         final boolean[] st = {matchAll, newestFirst};
         final TreeMap<String, Integer> counts = allTagCounts();
-        LinearLayout box = new LinearLayout(this);
-        box.setOrientation(LinearLayout.VERTICAL);
-        box.setPadding(dp(18), dp(4), dp(18), dp(10));
+        final Dialog d = new Dialog(this, android.R.style.Theme_Material_Dialog_NoActionBar);
+
+        final LinearLayout sheet = new LinearLayout(this);
+        sheet.setOrientation(LinearLayout.VERTICAL);
+        GradientDrawable sbg = new GradientDrawable();
+        sbg.setColor(BG);
+        float rr = dp(28);
+        sbg.setCornerRadii(new float[]{rr, rr, rr, rr, 0, 0, 0, 0});
+        sheet.setBackground(sbg);
+        sheet.setPadding(dp(16), dp(10), dp(16), dp(14));
+        sheet.setOnApplyWindowInsetsListener((v, insets) -> {
+            v.setPadding(dp(16), dp(10), dp(16), dp(14) + insets.getSystemWindowInsetBottom());
+            return insets;
+        });
+
+        View handle = new View(this);
+        handle.setBackground(round(blend(BG, FG, 0.25f), 3));
+        LinearLayout.LayoutParams hp = new LinearLayout.LayoutParams(dp(40), dp(5));
+        hp.gravity = Gravity.CENTER_HORIZONTAL;
+        hp.bottomMargin = dp(10);
+        sheet.addView(handle, hp);
+
+        LinearLayout hd = new LinearLayout(this);
+        hd.setGravity(Gravity.CENTER_VERTICAL);
+        hd.addView(tv(t("filter_title"), 20, FG, true), new LinearLayout.LayoutParams(0, -2, 1));
+        TextView closeX = tv("✕", 16, FG, true);
+        closeX.setGravity(Gravity.CENTER);
+        GradientDrawable cg = new GradientDrawable();
+        cg.setShape(GradientDrawable.OVAL);
+        cg.setColor(FIELD);
+        closeX.setBackground(cg);
+        closeX.setOnClickListener(v -> d.dismiss());
+        hd.addView(closeX, new LinearLayout.LayoutParams(dp(38), dp(38)));
+        sheet.addView(hd, new LinearLayout.LayoutParams(-1, -2));
+
         final EditText q = new EditText(this);
         q.setSingleLine(true);
         q.setHint(t("tag_search"));
         styleEdit(q);
-        box.addView(q, params(-1, 44));
-        TextView clear = button(t("clear_sel"));
-        LinearLayout.LayoutParams clp = params(-1, 40);
-        clp.topMargin = dp(8);
-        box.addView(clear, clp);
+        q.setBackground(round(FIELD, 24));
+        q.setPadding(dp(18), 0, dp(18), 0);
+        LinearLayout.LayoutParams qp = params(-1, 46);
+        qp.topMargin = dp(12);
+        qp.bottomMargin = dp(10);
+        sheet.addView(q, qp);
+
+        ScrollView sv = new ScrollView(this);
         final LinearLayout holder = new LinearLayout(this);
         holder.setOrientation(LinearLayout.VERTICAL);
-        box.addView(holder, new LinearLayout.LayoutParams(-1, -2));
-        ScrollView sv = new ScrollView(this);
-        sv.addView(box);
+        sv.addView(holder);
+        sheet.addView(sv, new LinearLayout.LayoutParams(-1, 0, 1));
+
+        LinearLayout foot = new LinearLayout(this);
+        foot.setPadding(0, dp(10), 0, 0);
+        final TextView clear = button(t("clear_sel"));
+        clear.setBackground(round(BTN, 24));
+        TextView applyB = primaryButton(t("apply"));
+        applyB.setBackground(round(ACCENT, 24));
+        foot.addView(clear, new LinearLayout.LayoutParams(0, dp(48), 1));
+        LinearLayout.LayoutParams ap = new LinearLayout.LayoutParams(0, dp(48), 1);
+        ap.setMarginStart(dp(10));
+        foot.addView(applyB, ap);
+        sheet.addView(foot, new LinearLayout.LayoutParams(-1, -2));
+
         final Runnable[] draw = new Runnable[1];
         draw[0] = () -> {
             holder.removeAllViews();
+            int picked = inc.size() + exc.size();
+            clear.setText(t("clear_sel") + (picked > 0 ? " (" + picked + ")" : ""));
             String f = q.getText().toString().trim().toLowerCase(Locale.ROOT);
             while (f.startsWith("#")) f = f.substring(1);
-            holder.addView(sectionLabel(t("sec_tags")));
+
+            LinearLayout c1 = card();
+            c1.addView(cardTitle(t("sec_tags")));
+            LinearLayout c2 = card();
+            c2.addView(cardTitle(t("sec_black")));
             if (counts.isEmpty()) {
-                holder.addView(tv(t("no_tags_yet"), 13, MUTED, false));
+                c1.addView(tv(t("no_tags_yet"), 13, MUTED, false));
+                addCard(holder, c1);
             } else {
                 Flow f1 = new Flow(this, dp(8), dp(8));
                 Flow f2 = new Flow(this, dp(8), dp(8));
@@ -740,39 +906,31 @@ public class MainActivity extends Activity {
                     final String tag = e.getKey();
                     if (!f.isEmpty() && !tag.contains(f)) continue;
                     shown++;
-                    TextView c1 = chip("#" + tag + " (" + e.getValue() + ")", inc.contains(tag));
-                    c1.setOnClickListener(v -> { if (!inc.remove(tag)) { inc.add(tag); exc.remove(tag); } draw[0].run(); });
-                    f1.addView(c1);
-                    TextView c2 = chip("#" + tag, exc.contains(tag), RED);
-                    c2.setOnClickListener(v -> { if (!exc.remove(tag)) { exc.add(tag); inc.remove(tag); } draw[0].run(); });
-                    f2.addView(c2);
+                    TextView a1 = filterChip(tag, e.getValue(), inc.contains(tag), false);
+                    a1.setOnClickListener(v -> { if (!inc.remove(tag)) { inc.add(tag); exc.remove(tag); } draw[0].run(); });
+                    f1.addView(a1);
+                    TextView a2 = filterChip(tag, 0, exc.contains(tag), true);
+                    a2.setOnClickListener(v -> { if (!exc.remove(tag)) { exc.add(tag); inc.remove(tag); } draw[0].run(); });
+                    f2.addView(a2);
                 }
                 if (shown == 0) {
-                    holder.addView(tv(t("no_tag_found"), 13, MUTED, false));
+                    c1.addView(tv(t("no_tag_found"), 13, MUTED, false));
+                    addCard(holder, c1);
                 } else {
-                    holder.addView(f1, new LinearLayout.LayoutParams(-1, -2));
-                    holder.addView(sectionLabel(t("sec_black")));
-                    holder.addView(f2, new LinearLayout.LayoutParams(-1, -2));
+                    c1.addView(f1, new LinearLayout.LayoutParams(-1, -2));
+                    c2.addView(f2, new LinearLayout.LayoutParams(-1, -2));
+                    addCard(holder, c1);
+                    addCard(holder, c2);
                 }
             }
-            holder.addView(sectionLabel(t("sec_match")));
-            Flow f3 = new Flow(this, dp(8), dp(8));
-            TextView m1 = chip(t("match_all"), st[0]);
-            TextView m2 = chip(t("match_any"), !st[0]);
-            m1.setOnClickListener(v -> { st[0] = true; draw[0].run(); });
-            m2.setOnClickListener(v -> { st[0] = false; draw[0].run(); });
-            f3.addView(m1);
-            f3.addView(m2);
-            holder.addView(f3, new LinearLayout.LayoutParams(-1, -2));
-            holder.addView(sectionLabel(t("sec_sort")));
-            Flow f4 = new Flow(this, dp(8), dp(8));
-            TextView n1 = chip(t("sort_new"), st[1]);
-            TextView n2 = chip(t("sort_old"), !st[1]);
-            n1.setOnClickListener(v -> { st[1] = true; draw[0].run(); });
-            n2.setOnClickListener(v -> { st[1] = false; draw[0].run(); });
-            f4.addView(n1);
-            f4.addView(n2);
-            holder.addView(f4, new LinearLayout.LayoutParams(-1, -2));
+            LinearLayout c3 = card();
+            c3.addView(cardTitle(t("sec_match")));
+            c3.addView(segmented(new String[]{t("match_all"), t("match_any")}, st[0] ? 0 : 1, i -> { st[0] = i == 0; draw[0].run(); }));
+            addCard(holder, c3);
+            LinearLayout c4 = card();
+            c4.addView(cardTitle(t("sec_sort")));
+            c4.addView(segmented(new String[]{t("sort_new"), t("sort_old")}, st[1] ? 0 : 1, i -> { st[1] = i == 0; draw[0].run(); }));
+            addCard(holder, c4);
         };
         q.addTextChangedListener(new android.text.TextWatcher() {
             @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) { }
@@ -780,47 +938,57 @@ public class MainActivity extends Activity {
             @Override public void afterTextChanged(android.text.Editable e) { }
         });
         clear.setOnClickListener(v -> { inc.clear(); exc.clear(); draw[0].run(); });
+        applyB.setOnClickListener(v -> {
+            incTags.clear(); incTags.addAll(inc);
+            excTags.clear(); excTags.addAll(exc);
+            matchAll = st[0]; newestFirst = st[1];
+            renderFeed();
+            d.dismiss();
+        });
         draw[0].run();
-        showDlg(dlg().setTitle(t("filter_title")).setView(sv)
-                .setNegativeButton(t("cancel"), null)
-                .setNeutralButton(t("reset"), (d, w) -> { incTags.clear(); excTags.clear(); matchAll = true; newestFirst = true; renderFeed(); })
-                .setPositiveButton(t("apply"), (d, w) -> {
-                    incTags.clear(); incTags.addAll(inc);
-                    excTags.clear(); excTags.addAll(exc);
-                    matchAll = st[0]; newestFirst = st[1];
-                    renderFeed();
-                }));
+        d.setContentView(sheet);
+        Window w = d.getWindow();
+        if (w != null) {
+            w.setBackgroundDrawable(new ColorDrawable(0x00000000));
+            w.setGravity(Gravity.BOTTOM);
+            w.setLayout(WindowManager.LayoutParams.MATCH_PARENT, (int) (getResources().getDisplayMetrics().heightPixels * 0.88f));
+            w.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+        }
+        d.setCanceledOnTouchOutside(true);
+        openDialogs.add(d);
+        d.show();
     }
 
     // ---------- Альбомы ----------
-    private LinearLayout albumListBox, albumGrid;
+    private LinearLayout albumListBox, albumGrid, albumHead, albumSelBar;
     private ScrollView albumListScroll, albumDetailScroll;
-    private TextView albumTitle, albumBackBtn, albumRenameBtn, albumDelBtn, albumNewBtn;
+    private TextView albumTitle, albumBackBtn, albumRenameBtn, albumDelBtn, albumNewBtn, albumSelCount;
+    private final LinkedHashSet<String> albumSelA = new LinkedHashSet<>(), albumSelI = new LinkedHashSet<>();
 
     private View buildAlbums() {
         LinearLayout r = new LinearLayout(this);
         r.setOrientation(LinearLayout.VERTICAL);
         r.setBackgroundColor(BG);
-        LinearLayout head = new LinearLayout(this);
-        head.setGravity(Gravity.CENTER_VERTICAL);
-        head.setPadding(dp(8), dp(12), dp(12), dp(8));
+        albumHead = new LinearLayout(this);
+        albumHead.setGravity(Gravity.CENTER_VERTICAL);
+        albumHead.setPadding(dp(8), dp(12), dp(12), dp(8));
         albumBackBtn = tv("←", 22, FG, true);
         albumBackBtn.setGravity(Gravity.CENTER);
         albumBackBtn.setOnClickListener(v -> { albumOpen = null; renderAlbums(); });
-        head.addView(albumBackBtn, new LinearLayout.LayoutParams(dp(44), dp(44)));
+        albumHead.addView(albumBackBtn, new LinearLayout.LayoutParams(dp(44), dp(44)));
         albumTitle = tv("", 21, FG, true);
         albumTitle.setSingleLine(true);
         albumTitle.setEllipsize(TextUtils.TruncateAt.END);
         albumTitle.setPadding(dp(8), 0, dp(8), 0);
-        head.addView(albumTitle, new LinearLayout.LayoutParams(0, -2, 1));
+        albumHead.addView(albumTitle, new LinearLayout.LayoutParams(0, -2, 1));
         albumRenameBtn = tv("✎", 20, FG, true);
         albumRenameBtn.setGravity(Gravity.CENTER);
         albumRenameBtn.setOnClickListener(v -> renameAlbum());
-        head.addView(albumRenameBtn, new LinearLayout.LayoutParams(dp(44), dp(44)));
+        albumHead.addView(albumRenameBtn, new LinearLayout.LayoutParams(dp(44), dp(44)));
         albumDelBtn = tv("🗑", 20, FG, true);
         albumDelBtn.setGravity(Gravity.CENTER);
         albumDelBtn.setOnClickListener(v -> deleteAlbumAsk());
-        head.addView(albumDelBtn, new LinearLayout.LayoutParams(dp(44), dp(44)));
+        albumHead.addView(albumDelBtn, new LinearLayout.LayoutParams(dp(44), dp(44)));
         albumNewBtn = tv("+ " + t("new_album"), 14, ONACC, true);
         albumNewBtn.setGravity(Gravity.CENTER);
         albumNewBtn.setPadding(dp(16), 0, dp(16), 0);
@@ -828,8 +996,33 @@ public class MainActivity extends Activity {
         albumNewBtn.setOnClickListener(v -> promptText(t("new_album"), "", t("album_name"), name -> {
             if (!name.isEmpty()) { lib.createAlbum(name); lib.save(); renderAlbums(); }
         }));
-        head.addView(albumNewBtn, new LinearLayout.LayoutParams(-2, dp(40)));
-        r.addView(head, new LinearLayout.LayoutParams(-1, -2));
+        albumHead.addView(albumNewBtn, new LinearLayout.LayoutParams(-2, dp(40)));
+        r.addView(albumHead, new LinearLayout.LayoutParams(-1, -2));
+
+        albumSelBar = new LinearLayout(this);
+        albumSelBar.setGravity(Gravity.CENTER_VERTICAL);
+        albumSelBar.setPadding(dp(8), dp(12), dp(12), dp(8));
+        TextView cancelSel = tv("✕", 20, FG, true);
+        cancelSel.setGravity(Gravity.CENTER);
+        cancelSel.setOnClickListener(v -> albumSelCancel());
+        albumSelBar.addView(cancelSel, new LinearLayout.LayoutParams(dp(44), dp(44)));
+        albumSelCount = tv("", 17, FG, true);
+        albumSelCount.setPadding(dp(8), 0, dp(8), 0);
+        albumSelBar.addView(albumSelCount, new LinearLayout.LayoutParams(0, -2, 1));
+        TextView selAll = button(t("sel_all"));
+        selAll.setBackground(round(BTN, 20));
+        selAll.setOnClickListener(v -> albumSelAll());
+        albumSelBar.addView(selAll, new LinearLayout.LayoutParams(-2, dp(40)));
+        TextView selDel = tv("🗑", 18, 0xFFFFFFFF, true);
+        selDel.setGravity(Gravity.CENTER);
+        selDel.setBackground(round(RED, 20));
+        selDel.setOnClickListener(v -> albumSelDelete());
+        LinearLayout.LayoutParams sdp = new LinearLayout.LayoutParams(dp(54), dp(40));
+        sdp.setMarginStart(dp(8));
+        albumSelBar.addView(selDel, sdp);
+        albumSelBar.setVisibility(View.GONE);
+        r.addView(albumSelBar, new LinearLayout.LayoutParams(-1, -2));
+
         albumListScroll = new ScrollView(this);
         albumListBox = new LinearLayout(this);
         albumListBox.setOrientation(LinearLayout.VERTICAL);
@@ -848,10 +1041,68 @@ public class MainActivity extends Activity {
         return r;
     }
 
+    private void albumSelCancel() { albumSelA.clear(); albumSelI.clear(); renderAlbums(); }
+
+    private void albumSelAll() {
+        if (albumOpen == null) { for (Library.Album a : lib.albums) albumSelA.add(a.id); }
+        else { for (Library.Item it : lib.inAlbum(albumOpen)) albumSelI.add(it.id); }
+        renderAlbums();
+    }
+
+    private void toggleAlbumSel(String id) {
+        if (!albumSelA.remove(id)) albumSelA.add(id);
+        renderAlbums();
+    }
+
+    // В списке альбомов: удалить выбранные альбомы (с файлами или без). Внутри альбома: выбранные файлы в корзину.
+    private void albumSelDelete() {
+        if (albumOpen != null) {
+            ArrayList<Library.Item> targets = new ArrayList<>();
+            for (Library.Item it : lib.inAlbum(albumOpen)) if (albumSelI.contains(it.id)) targets.add(it);
+            for (Library.Item it : targets) lib.moveToTrash(it);
+            lib.save();
+            albumSelI.clear();
+            refreshAll();
+            toast(tf("moved_trash", targets.size()));
+            return;
+        }
+        final ArrayList<String> ids = new ArrayList<>(albumSelA);
+        if (ids.isEmpty()) return;
+        showDlg(dlg().setTitle(tf("album_del_q", ids.size())).setMessage(t("albums_files_note"))
+                .setNegativeButton(t("cancel"), null)
+                .setNeutralButton(t("albums_only"), (d, w) -> deleteAlbums(ids, false))
+                .setPositiveButton(t("albums_files"), (d, w) -> deleteAlbums(ids, true)));
+    }
+
+    private void deleteAlbums(ArrayList<String> ids, boolean withFiles) {
+        int files = 0;
+        for (String id : ids) {
+            if (withFiles) for (Library.Item it : lib.inAlbum(id)) { lib.moveToTrash(it); files++; }
+            lib.deleteAlbum(id);
+        }
+        lib.save();
+        albumSelA.clear();
+        refreshAll();
+        toast(tf("albums_deleted", ids.size()) + (files > 0 ? " · " + tf("moved_trash", files) : ""));
+    }
+
     private void renderAlbums() {
         if (albumListBox == null || !visible(tabViews[1])) return;
         if (albumOpen != null && lib.albumById(albumOpen) == null) albumOpen = null;
-        boolean detail = albumOpen != null;
+        HashSet<String> aids = new HashSet<>();
+        for (Library.Album a : lib.albums) aids.add(a.id);
+        albumSelA.retainAll(aids);
+        final boolean detail = albumOpen != null;
+        if (detail) {
+            albumSelA.clear();
+            HashSet<String> iids = new HashSet<>();
+            for (Library.Item it : lib.inAlbum(albumOpen)) iids.add(it.id);
+            albumSelI.retainAll(iids);
+        } else albumSelI.clear();
+        final boolean selMode = detail ? !albumSelI.isEmpty() : !albumSelA.isEmpty();
+        albumHead.setVisibility(selMode ? View.GONE : View.VISIBLE);
+        albumSelBar.setVisibility(selMode ? View.VISIBLE : View.GONE);
+        albumSelCount.setText(tf("sel_n", detail ? albumSelI.size() : albumSelA.size()));
         int dv = detail ? View.VISIBLE : View.GONE, lv = detail ? View.GONE : View.VISIBLE;
         albumBackBtn.setVisibility(dv);
         albumRenameBtn.setVisibility(dv);
@@ -865,7 +1116,7 @@ public class MainActivity extends Activity {
             ArrayList<Library.Item> list = lib.inAlbum(a.id);
             albumGrid.removeAllViews();
             if (list.isEmpty()) albumGrid.addView(emptyNote(t("album_empty")), params(-1, -2));
-            else fillGrid(albumGrid, albumDetailScroll, list);
+            else fillGrid(albumGrid, albumDetailScroll, list, albumSelI, this::renderAlbums);
             return;
         }
         albumTitle.setText(t("tab_albums").toUpperCase(Locale.ROOT));
@@ -873,10 +1124,11 @@ public class MainActivity extends Activity {
         if (lib.albums.isEmpty()) { albumListBox.addView(emptyNote(t("no_albums")), params(-1, -2)); return; }
         for (final Library.Album a : new ArrayList<>(lib.albums)) {
             ArrayList<Library.Item> its = lib.inAlbum(a.id);
+            final boolean picked = albumSelA.contains(a.id);
             LinearLayout card = new LinearLayout(this);
             card.setGravity(Gravity.CENTER_VERTICAL);
             card.setPadding(dp(10), dp(9), dp(12), dp(9));
-            card.setBackground(round(PANEL, 14));
+            card.setBackground(round(picked ? blend(PANEL, ACCENT, 0.3f) : PANEL, 14));
             LinearLayout.LayoutParams cp = params(-1, -2);
             cp.bottomMargin = dp(8);
             albumListBox.addView(card, cp);
@@ -897,7 +1149,16 @@ public class MainActivity extends Activity {
             info.addView(nm);
             info.addView(tv(tf("items_n", its.size()), 12, MUTED, false));
             card.addView(info, new LinearLayout.LayoutParams(0, -2, 1));
-            card.setOnClickListener(v -> { albumOpen = a.id; renderAlbums(); });
+            if (selMode) {
+                TextView ck = tv(picked ? "☑" : "☐", 22, picked ? ACCENT : FG, false);
+                ck.setGravity(Gravity.CENTER);
+                card.addView(ck, new LinearLayout.LayoutParams(dp(36), dp(48)));
+            }
+            card.setOnClickListener(v -> {
+                if (!albumSelA.isEmpty()) toggleAlbumSel(a.id);
+                else { albumSelI.clear(); albumOpen = a.id; renderAlbums(); }
+            });
+            card.setOnLongClickListener(v -> { toggleAlbumSel(a.id); return true; });
         }
     }
 
@@ -1082,12 +1343,14 @@ public class MainActivity extends Activity {
             meta.setEllipsize(TextUtils.TruncateAt.END);
             details.addView(meta);
             List<String> ts = Library.tagsOf(it);
-            TextView tag = tv(ts.isEmpty() ? t("tap_add_tags") : "# " + TextUtils.join(", ", ts), 12, MUTED, false);
-            tag.setMaxLines(2);
-            tag.setEllipsize(TextUtils.TruncateAt.END);
             LinearLayout.LayoutParams tp = params(-1, -2);
             tp.topMargin = dp(4);
-            details.addView(tag, tp);
+            if (ts.isEmpty()) details.addView(tv(t("tap_add_tags"), 12, MUTED, false), tp);
+            else {
+                Flow tagFlow = new Flow(this, dp(4), dp(4)).rows(2);
+                for (String s : ts) tagFlow.addView(tagPill(s, true));
+                details.addView(tagFlow, tp);
+            }
             TextView side = tv(mode ? (picked ? "☑" : "☐") : "✎", 22, mode && picked ? ACCENT : FG, false);
             side.setGravity(Gravity.CENTER);
             card.addView(side, new LinearLayout.LayoutParams(dp(40), dp(48)));
@@ -1253,8 +1516,10 @@ public class MainActivity extends Activity {
                 info.addView(nm);
                 LinearLayout btns = new LinearLayout(this);
                 TextView re = button(t("restore")), de = button(t("del_forever"));
-                re.setTextSize(12);
-                de.setTextSize(12);
+                re.setTextSize(13);
+                de.setTextSize(13);
+                re.setSingleLine(true);
+                de.setSingleLine(true);
                 de.setTextColor(0xFFFFFFFF);
                 de.setBackground(round(RED, 12));
                 re.setOnClickListener(v -> { lib.restore(it); lib.save(); draw[0].run(); toast(tf("restored", 1)); });
@@ -1317,6 +1582,23 @@ public class MainActivity extends Activity {
         });
     }
 
+    private TextView circleBtn(String glyph, float size) {
+        TextView b = tv(glyph, size, 0xFFFFFFFF, false);
+        b.setGravity(Gravity.CENTER);
+        GradientDrawable g = new GradientDrawable();
+        g.setShape(GradientDrawable.OVAL);
+        g.setColor(0x8C000000);
+        b.setBackground(g);
+        return b;
+    }
+
+    private boolean hits(View v, MotionEvent e) {
+        if (v == null || v.getVisibility() != View.VISIBLE) return false;
+        Rect r = new Rect();
+        if (!v.getGlobalVisibleRect(r)) return false;
+        return r.contains((int) e.getRawX(), (int) e.getRawY());
+    }
+
     private void openViewer(final ArrayList<Library.Item> list, int start) {
         if (list.isEmpty()) return;
         final int[] idx = {start};
@@ -1326,6 +1608,8 @@ public class MainActivity extends Activity {
         final MediaController[] mcRef = new MediaController[1];
         final ImageView[] pdfView = new ImageView[1];
         final boolean[] pdfMode = {false};
+        final boolean[] videoMode = {false};
+        final View[] chrome = new View[4];   // верх, низ, стрелка назад, стрелка вперёд
         final PdfHolder pdf = new PdfHolder();
         final GestureDetector gd = new GestureDetector(this, new GestureDetector.SimpleOnGestureListener() {
             @Override public boolean onFling(MotionEvent e1, MotionEvent e2, float vx, float vy) {
@@ -1344,55 +1628,105 @@ public class MainActivity extends Activity {
                 }
                 return false;
             }
+            // Одиночное касание по картинке прячет и показывает панели
+            @Override public boolean onSingleTapConfirmed(MotionEvent e) {
+                if (videoMode[0]) return false;
+                for (View c : chrome) if (hits(c, e)) return false;
+                int vis = chrome[0].getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE;
+                chrome[0].setVisibility(vis);
+                chrome[1].setVisibility(vis);
+                if (list.size() > 1) { chrome[2].setVisibility(vis); chrome[3].setVisibility(vis); }
+                return true;
+            }
         });
         final Dialog dialog = new Dialog(this, android.R.style.Theme_Black_NoTitleBar_Fullscreen) {
             @Override public boolean dispatchTouchEvent(MotionEvent ev) { gd.onTouchEvent(ev); return super.dispatchTouchEvent(ev); }
         };
         final FrameLayout media = new FrameLayout(this);
-        FrameLayout rootF = new FrameLayout(this);
+        final FrameLayout rootF = new FrameLayout(this);
         rootF.setBackgroundColor(0xFF000000);
         rootF.addView(media, new FrameLayout.LayoutParams(-1, -1));
-        LinearLayout top = new LinearLayout(this);
-        top.setOrientation(LinearLayout.VERTICAL);
-        top.setBackgroundColor(0xB3000000);
-        top.setPadding(dp(8), dp(8), dp(8), dp(8));
-        LinearLayout bar = new LinearLayout(this);
-        bar.setGravity(Gravity.CENTER_VERTICAL);
-        TextView close = viewerBtn("✕"), prev = viewerBtn("◀"), next = viewerBtn("▶");
-        final TextView title = tv("", 13, 0xFFF0F0F4, false);
-        title.setMaxLines(2);
-        title.setEllipsize(TextUtils.TruncateAt.END);
-        title.setPadding(dp(8), 0, dp(8), 0);
-        final TextView tagsTv = tv("", 12, 0xFFB0B3BD, false);
-        tagsTv.setPadding(dp(52), dp(2), dp(8), 0);
-        bar.addView(close, new LinearLayout.LayoutParams(dp(44), dp(44)));
-        bar.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
-        if (list.size() > 1) {
-            bar.addView(prev, new LinearLayout.LayoutParams(dp(44), dp(44)));
-            bar.addView(next, new LinearLayout.LayoutParams(dp(44), dp(44)));
-        }
-        top.addView(bar);
-        top.addView(tagsTv);
+
+        // Верхняя панель: закрыть, счётчик, удалить
+        final LinearLayout top = new LinearLayout(this);
+        top.setGravity(Gravity.CENTER_VERTICAL);
+        top.setPadding(dp(12), dp(14), dp(12), dp(26));
+        top.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, new int[]{0xCC000000, 0x00000000}));
+        TextView close = circleBtn("✕", 16);
+        TextView del = circleBtn("🗑", 16);
+        final TextView counter = tv("", 13, 0xFFFFFFFF, true);
+        counter.setGravity(Gravity.CENTER);
+        counter.setPadding(dp(14), dp(7), dp(14), dp(7));
+        counter.setBackground(round(0x8C000000, 20));
+        top.addView(close, new LinearLayout.LayoutParams(dp(40), dp(40)));
+        top.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1));
+        top.addView(counter, new LinearLayout.LayoutParams(-2, -2));
+        top.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1));
+        top.addView(del, new LinearLayout.LayoutParams(dp(40), dp(40)));
         rootF.addView(top, new FrameLayout.LayoutParams(-1, -2, Gravity.TOP));
+
+        // Стрелки по бокам
+        TextView prev = circleBtn("‹", 26), next = circleBtn("›", 26);
+        FrameLayout.LayoutParams plp = new FrameLayout.LayoutParams(dp(44), dp(44), Gravity.CENTER_VERTICAL | Gravity.START);
+        plp.setMarginStart(dp(10));
+        FrameLayout.LayoutParams nlp = new FrameLayout.LayoutParams(dp(44), dp(44), Gravity.CENTER_VERTICAL | Gravity.END);
+        nlp.setMarginEnd(dp(10));
+        rootF.addView(prev, plp);
+        rootF.addView(next, nlp);
+
+        // Нижняя панель: страницы PDF, имя, детали, цветные теги
+        final LinearLayout bottom = new LinearLayout(this);
+        bottom.setOrientation(LinearLayout.VERTICAL);
+        bottom.setPadding(dp(18), dp(16), dp(18), dp(20));
+        GradientDrawable bbg = new GradientDrawable();
+        bbg.setColor(0xE6101114);
+        float br = dp(24);
+        bbg.setCornerRadii(new float[]{br, br, br, br, 0, 0, 0, 0});
+        bottom.setBackground(bbg);
 
         final LinearLayout pdfBar = new LinearLayout(this);
         pdfBar.setGravity(Gravity.CENTER);
-        pdfBar.setBackgroundColor(0xB3000000);
-        pdfBar.setPadding(dp(8), dp(6), dp(8), dp(6));
         TextView pPrev = viewerBtn("◀"), pNext = viewerBtn("▶");
         final TextView pageTxt = tv("", 14, 0xFFF0F0F4, true);
         pageTxt.setGravity(Gravity.CENTER);
-        pdfBar.addView(pPrev, new LinearLayout.LayoutParams(dp(56), dp(44)));
+        pdfBar.addView(pPrev, new LinearLayout.LayoutParams(dp(56), dp(40)));
         pdfBar.addView(pageTxt, new LinearLayout.LayoutParams(dp(150), -2));
-        pdfBar.addView(pNext, new LinearLayout.LayoutParams(dp(56), dp(44)));
+        pdfBar.addView(pNext, new LinearLayout.LayoutParams(dp(56), dp(40)));
         pdfBar.setVisibility(View.GONE);
-        rootF.addView(pdfBar, new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM));
+        bottom.addView(pdfBar, new LinearLayout.LayoutParams(-1, -2));
+        final TextView nameTv = tv("", 15, 0xFFFFFFFF, true);
+        nameTv.setMaxLines(2);
+        nameTv.setEllipsize(TextUtils.TruncateAt.END);
+        bottom.addView(nameTv, new LinearLayout.LayoutParams(-1, -2));
+        final TextView metaTv = tv("", 12, 0xFFB0B3BD, false);
+        LinearLayout.LayoutParams mlp = new LinearLayout.LayoutParams(-1, -2);
+        mlp.topMargin = dp(2);
+        bottom.addView(metaTv, mlp);
+        final Flow tagsFlow = new Flow(this, dp(6), dp(6)).rows(5);
+        LinearLayout.LayoutParams tflp = new LinearLayout.LayoutParams(-1, -2);
+        tflp.topMargin = dp(12);
+        bottom.addView(tagsFlow, tflp);
+        rootF.addView(bottom, new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM));
+        chrome[0] = top; chrome[1] = bottom; chrome[2] = prev; chrome[3] = next;
 
         close.setOnClickListener(v -> dialog.dismiss());
         prev.setOnClickListener(v -> { idx[0] = (idx[0] + list.size() - 1) % list.size(); show[0].run(); });
         next.setOnClickListener(v -> { idx[0] = (idx[0] + 1) % list.size(); show[0].run(); });
         pPrev.setOnClickListener(v -> { if (pdf.page > 0) { pdf.page--; pageShow[0].run(); } });
         pNext.setOnClickListener(v -> { if (pdf.page + 1 < pdf.pages) { pdf.page++; pageShow[0].run(); } });
+        // Удаление прямо из просмотра: файл уходит в корзину, показывается следующий
+        del.setOnClickListener(v -> {
+            int i = idx[0];
+            Library.Item gone = list.get(i);
+            lib.moveToTrash(gone);
+            lib.save();
+            list.remove(i);
+            refreshAll();
+            toast(tf("moved_trash", 1));
+            if (list.isEmpty()) { dialog.dismiss(); return; }
+            if (idx[0] >= list.size()) idx[0] = list.size() - 1;
+            show[0].run();
+        });
 
         pageShow[0] = () -> {
             final int pg = pdf.page;
@@ -1429,14 +1763,27 @@ public class MainActivity extends Activity {
             media.removeAllViews();
             closePdf(pdf);
             pdfMode[0] = false;
+            videoMode[0] = false;
             pdfBar.setVisibility(View.GONE);
             Library.Item it = list.get(idx[0]);
-            title.setText((idx[0] + 1) + " / " + list.size() + "  ·  " + it.name);
-            List<String> ts = Library.tagsOf(it);
-            tagsTv.setText(ts.isEmpty() ? t("no_tags") : "# " + TextUtils.join(", ", ts));
+            counter.setText((idx[0] + 1) + " / " + list.size());
+            nameTv.setText(it.name);
             final File f = new File(it.path);
+            String kind = Library.isPdf(it.name) ? t("kind_manga") : Library.isVideo(it.name) ? t("kind_video") : t("kind_photo");
+            metaTv.setText(kind + " · " + fmtSize(f.length()) + " · " + DateFormat.getDateInstance(DateFormat.MEDIUM, new Locale(lang)).format(new Date(it.added)));
+            tagsFlow.removeAllViews();
+            List<String> ts = Library.tagsOf(it);
+            for (String s : ts) tagsFlow.addView(tagPill(s, false));
+            tagsFlow.setVisibility(ts.isEmpty() ? View.GONE : View.VISIBLE);
+            int arrows = list.size() > 1 && top.getVisibility() == View.VISIBLE ? View.VISIBLE : View.GONE;
+            prev.setVisibility(arrows);
+            next.setVisibility(arrows);
             if (!f.exists()) { toast(t("missing")); return; }
+            final FrameLayout.LayoutParams mlp2 = new FrameLayout.LayoutParams(-1, -1);
             if (Library.isVideo(it.name)) {
+                videoMode[0] = true;
+                top.setVisibility(View.VISIBLE);
+                bottom.setVisibility(View.VISIBLE);
                 VideoView vv = new VideoView(this);
                 MediaController mc = new MediaController(this);
                 mc.setAnchorView(vv);
@@ -1444,8 +1791,15 @@ public class MainActivity extends Activity {
                 mcRef[0] = mc;
                 vv.setVideoPath(f.getAbsolutePath());
                 media.addView(vv, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
+                // видео и его кнопки управления остаются над нижней панелью
+                bottom.post(() -> {
+                    if (my != token[0]) return;
+                    mlp2.bottomMargin = bottom.getHeight();
+                    media.setLayoutParams(mlp2);
+                });
                 vv.start();
             } else if (Library.isPdf(it.name)) {
+                media.setLayoutParams(mlp2);
                 pdfMode[0] = true;
                 pdf.page = 0;
                 pdfBar.setVisibility(View.VISIBLE);
@@ -1466,6 +1820,7 @@ public class MainActivity extends Activity {
                     ui.post(() -> { if (my == token[0]) pageShow[0].run(); });
                 });
             } else {
+                media.setLayoutParams(mlp2);
                 final ImageView iv = new ImageView(this);
                 iv.setScaleType(ImageView.ScaleType.FIT_CENTER);
                 media.addView(iv, new FrameLayout.LayoutParams(-1, -1));
@@ -1770,7 +2125,7 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams rsp = params(-1, 48);
         rsp.topMargin = dp(10);
         setBox.addView(rs, rsp);
-        TextView ver = tv("Offline Media Vault · v1.4", 11, MUTED, false);
+        TextView ver = tv("Offline Media Vault · v1.5", 11, MUTED, false);
         ver.setGravity(Gravity.CENTER);
         ver.setPadding(0, dp(18), 0, 0);
         setBox.addView(ver, new LinearLayout.LayoutParams(-1, -2));
