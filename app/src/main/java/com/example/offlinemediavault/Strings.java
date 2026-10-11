@@ -295,5 +295,31 @@ final class Strings {
         b("albums_files", "Alben und Dateien", "Albums et fichiers", "相册和文件", "アルバムとファイル");
         b("albums_files_note", "„Nur Alben“ behält die Dateien in der Bibliothek. „Alben und Dateien“ verschiebt die Dateien in den Papierkorb.", "« Albums seulement » garde les fichiers dans la bibliothèque. « Albums et fichiers » envoie les fichiers à la corbeille.", "“仅删除相册”会将文件保留在资料库中；“相册和文件”会将文件移到回收站。", "「アルバムのみ」はファイルをライブラリに残します。「アルバムとファイル」はファイルをゴミ箱へ移動します。");
         b("albums_deleted", "Gelöschte Alben: %d", "Albums supprimés : %d", "已删除相册：%d", "削除したアルバム：%d");
+        a("no_album", "Remove from all albums", "Убрать из всех альбомов", "Quitar de todos los álbumes", "حذف از همه آلبوم‌ها");
+        b("no_album", "Aus allen Alben entfernen", "Retirer de tous les albums", "从所有相册移除", "すべてのアルバムから外す");
+        a("moved_album", "Added to album: %d", "Добавлено в альбом: %d", "Añadidos al álbum: %d", "به آلبوم افزوده شد: %d");
+        b("moved_album", "Zum Album hinzugefügt: %d", "Ajoutés à l'album : %d", "已添加到相册：%d", "アルバムに追加しました：%d");
+        a("pick_album", "Add to album", "Добавить в альбом", "Añadir al álbum", "افزودن به آلبوم");
+        b("pick_album", "Zum Album hinzufügen", "Ajouter à l'album", "添加到相册", "アルバムに追加");
+        a("rm_from_album", "Remove from album", "Убрать из альбома", "Quitar del álbum", "حذف از آلبوم");
+        b("rm_from_album", "Aus Album entfernen", "Retirer de l'album", "从相册移除", "アルバムから外す");
+        a("del_from_app", "Delete from app", "Удалить из приложения", "Eliminar de la app", "حذف از برنامه");
+        b("del_from_app", "Aus der App löschen", "Supprimer de l'app", "从应用中删除", "アプリから削除");
+        a("removed_from_album", "Removed from album: %d", "Убрано из альбома: %d", "Quitados del álbum: %d", "از آلبوم حذف شد: %d");
+        b("removed_from_album", "Aus Album entfernt: %d", "Retirés de l'album : %d", "已从相册移除：%d", "アルバムから外しました：%d");
+        a("app_icon", "App icon", "Иконка приложения", "Icono de la app", "آیکون برنامه");
+        b("app_icon", "App-Symbol", "Icône de l'app", "应用图标", "アプリアイコン");
+        a("icon_changed", "Icon changed. Your launcher may need a few seconds to update.", "Иконка изменена. Лаунчеру может потребоваться несколько секунд, чтобы обновиться.", "Icono cambiado. El launcher puede tardar unos segundos en actualizarse.", "آیکون تغییر کرد. ممکن است چند ثانیه طول بکشد تا لانچر به‌روز شود.");
+        b("icon_changed", "Symbol geändert. Der Launcher braucht evtl. einige Sekunden zum Aktualisieren.", "Icône modifiée. Le lanceur peut mettre quelques secondes à se mettre à jour.", "图标已更改，启动器可能需要几秒钟才会刷新。", "アイコンを変更しました。ランチャーの更新に数秒かかる場合があります。");
+        a("icon_1", "Classic", "Классика", "Clásico", "کلاسیک");
+        b("icon_1", "Klassisch", "Classique", "经典", "クラシック");
+        a("icon_2", "Winter", "Зима", "Invierno", "زمستان");
+        b("icon_2", "Winter", "Hiver", "冬", "冬");
+        a("icon_3", "Autumn", "Осень", "Otoño", "پاییز");
+        b("icon_3", "Herbst", "Automne", "秋", "秋");
+        a("icon_4", "Spring", "Весна", "Primavera", "بهار");
+        b("icon_4", "Frühling", "Printemps", "春", "春");
+        a("icon_5", "Summer", "Лето", "Verano", "تابستان");
+        b("icon_5", "Sommer", "Été", "夏", "夏");
     }
 }

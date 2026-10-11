@@ -32,6 +32,34 @@ final class Library {
         boolean trashed;
     }
 
+    // Один файл может лежать в нескольких альбомах: item.album хранит id через запятую
+    static List<String> albumIdsOf(Item it) {
+        ArrayList<String> out = new ArrayList<>();
+        if (it.album == null) return out;
+        for (String s : it.album.split(",")) { s = s.trim(); if (!s.isEmpty() && !out.contains(s)) out.add(s); }
+        return out;
+    }
+
+    static boolean inAlb(Item it, String id) { return albumIdsOf(it).contains(id); }
+
+    static void addAlb(Item it, String id) {
+        List<String> l = albumIdsOf(it);
+        if (!l.contains(id)) l.add(id);
+        it.album = join(l);
+    }
+
+    static void removeAlb(Item it, String id) {
+        List<String> l = albumIdsOf(it);
+        l.remove(id);
+        it.album = join(l);
+    }
+
+    private static String join(List<String> l) {
+        StringBuilder sb = new StringBuilder();
+        for (String s : l) { if (sb.length() > 0) sb.append(','); sb.append(s); }
+        return sb.toString();
+    }
+
     static class Album {
         String id = "", name = "";
         long created;
@@ -336,7 +364,7 @@ final class Library {
 
     synchronized ArrayList<Item> inAlbum(String albumId) {
         ArrayList<Item> out = new ArrayList<>();
-        for (Item it : items) if (!it.trashed && albumId.equals(it.album)) out.add(it);
+        for (Item it : items) if (!it.trashed && inAlb(it, albumId)) out.add(it);
         Collections.sort(out, (x, y) -> Long.compare(x.added, y.added));
         return out;
     }
@@ -372,7 +400,7 @@ final class Library {
     synchronized void deleteAlbum(String id) {
         Album a = albumById(id);
         if (a != null) albums.remove(a);
-        for (Item it : items) if (id.equals(it.album)) it.album = "";
+        for (Item it : items) removeAlb(it, id);
     }
 
     synchronized void moveToTrash(Item it) {
@@ -383,7 +411,7 @@ final class Library {
     synchronized void restore(Item it) {
         it.trashed = false;
         it.trashedAt = 0;
-        if (!it.album.isEmpty() && albumById(it.album) == null) it.album = "";
+        for (String aid : albumIdsOf(it)) if (albumById(aid) == null) removeAlb(it, aid);
     }
 
     synchronized String deleteForever(Item it) {
@@ -411,7 +439,7 @@ final class Library {
         JSONObject o = new JSONObject();
         o.put("format", "omv1");
         HashSet<String> used = new HashSet<>();
-        for (Item it : list) if (!it.album.isEmpty()) used.add(it.album);
+        for (Item it : list) used.addAll(albumIdsOf(it));
         JSONArray al = new JSONArray();
         for (Album a : albums) {
             if (!used.contains(a.id)) continue;
