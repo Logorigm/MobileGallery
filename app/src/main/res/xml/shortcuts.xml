@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="upload"
+        android:enabled="true"
+        android:icon="@drawable/icon_prev_1"
+        android:shortcutShortLabel="@string/shortcut_upload"
+        android:shortcutLongLabel="@string/shortcut_upload_long">
+        <intent
+            android:action="com.example.offlinemediavault.UPLOAD"
+            android:targetPackage="com.example.offlinemediavault"
+            android:targetClass="com.example.offlinemediavault.MainActivity" />
+    </shortcut>
+    <shortcut
+        android:shortcutId="favorites"
+        android:enabled="true"
+        android:icon="@drawable/icon_prev_1"
+        android:shortcutShortLabel="@string/shortcut_fav"
+        android:shortcutLongLabel="@string/shortcut_fav_long">
+        <intent
+            android:action="com.example.offlinemediavault.FAVORITES"
+            android:targetPackage="com.example.offlinemediavault"
+            android:targetClass="com.example.offlinemediavault.MainActivity" />
+    </shortcut>
+</shortcuts>
