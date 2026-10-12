@@ -171,6 +171,7 @@ public class MainActivity extends Activity {
             case "🗜": return R.drawable.ic_archive;
             case "≡": return R.drawable.ic_drag_handle;
             case "🎬": return R.drawable.ic_reels;
+            case "🎨": return R.drawable.ic_palette;
             case "⛶": return R.drawable.ic_fullscreen;
             case "🔇": return R.drawable.ic_volume_off;
             case "🔊": return R.drawable.ic_volume_up;
@@ -285,6 +286,7 @@ public class MainActivity extends Activity {
         final Path path = new Path();
         final int c1, c2, ring;
         final boolean sel;
+        int[] metal;   // градиент блика для «металлических» тем
         Swatch(Context c, int a, int b, int ringColor, boolean selected, final int cornerPx) {
             super(c);
             c1 = a; c2 = b; ring = ringColor; sel = selected;
@@ -299,9 +301,11 @@ public class MainActivity extends Activity {
             p.setColor(c1);
             cv.drawRect(0, 0, w, h, p);
             p.setColor(c2);
+            if (metal != null) p.setShader(new LinearGradient(w, 0, 0, h, metal, null, Shader.TileMode.CLAMP));
             path.reset();
             path.moveTo(w, 0); path.lineTo(w, h); path.lineTo(0, h); path.close();
             cv.drawPath(path, p);
+            p.setShader(null);
             if (sel) {
                 p.setStyle(Paint.Style.STROKE);
                 p.setStrokeWidth(Math.max(4, w / 9f));
@@ -366,9 +370,56 @@ public class MainActivity extends Activity {
     }
 
     // ---------- Темы ----------
-    private static final String[] TH_KEY = {"system", "dark", "light", "teal", "orange", "rose", "green", "navy", "black", "lrose", "lteal", "lorange", "lblue"};
-    private static final int[] TH_BG = {0, 0xFF18191D, 0xFFF4F5F8, 0xFF0F1B1E, 0xFF1C1713, 0xFF1D1318, 0xFF121B14, 0xFF0E1A33, 0xFF0A0A0A, 0xFFFBF1F4, 0xFFEFF8F6, 0xFFFAF4EC, 0xFFEFF4FC};
-    private static final int[] TH_ACC = {0, 0xFF777FE8, 0xFF4F5BD5, 0xFF22B8A6, 0xFFF0883A, 0xFFE8527E, 0xFF4CC26A, 0xFFF2C14E, 0xFFE0383E, 0xFFD6436E, 0xFF139C8C, 0xFFE07B1F, 0xFF2F6FD6};
+    /**
+     * Тема: фон и акцент. У «металлических» тем (коллекция «Люкс», неон, закат) есть градиент блика:
+     * hi — светлый край, acc — середина, lo — тёмный край. on — цвет текста на акценте (0 — как раньше, по яркости).
+     */
+    static final class Th {
+        final String key;
+        final int bg, acc, hi, lo, on, group;   // group: 0 основные, 1 тёмные цветные, 2 светлые, 3 люкс
+
+        Th(String key, int bg, int acc, int hi, int lo, int on, int group) {
+            this.key = key; this.bg = bg; this.acc = acc; this.hi = hi; this.lo = lo; this.on = on; this.group = group;
+        }
+
+        boolean metal() { return hi != 0; }
+    }
+
+    private static final int ON_DARK = 0xFF15130F, ON_WHITE = 0xFFFFFFFF;
+    private static final Th[] THEMES = {
+            new Th("system", 0, 0, 0, 0, 0, 0),
+            new Th("dark", 0xFF18191D, 0xFF777FE8, 0, 0, 0, 0),
+            new Th("light", 0xFFF4F5F8, 0xFF4F5BD5, 0, 0, 0, 0),
+            new Th("black", 0xFF0A0A0A, 0xFFE0383E, 0, 0, 0, 0),
+            new Th("teal", 0xFF0F1B1E, 0xFF22B8A6, 0, 0, 0, 1),
+            new Th("orange", 0xFF1C1713, 0xFFF0883A, 0, 0, 0, 1),
+            new Th("rose", 0xFF1D1318, 0xFFE8527E, 0, 0, 0, 1),
+            new Th("green", 0xFF121B14, 0xFF4CC26A, 0, 0, 0, 1),
+            new Th("navy", 0xFF0E1A33, 0xFFF2C14E, 0, 0, 0, 1),
+            new Th("ocean", 0xFF06141C, 0xFF2EC4F1, 0, 0, ON_DARK, 1),
+            new Th("nord", 0xFF2E3440, 0xFF88C0D0, 0, 0, ON_DARK, 1),
+            new Th("dracula", 0xFF282A36, 0xFFBD93F9, 0, 0, ON_DARK, 1),
+            new Th("coffee", 0xFF1B1411, 0xFFC69C6D, 0, 0, ON_DARK, 1),
+            new Th("neon", 0xFF0A0A14, 0xFFFF4FD8, 0xFFFF8AE6, 0xFF00D9FF, ON_DARK, 1),
+            new Th("sunset", 0xFF1A0F1A, 0xFFFF7A59, 0xFFFFC15E, 0xFFE8457C, ON_DARK, 1),
+            new Th("lrose", 0xFFFBF1F4, 0xFFD6436E, 0, 0, 0, 2),
+            new Th("lteal", 0xFFEFF8F6, 0xFF139C8C, 0, 0, 0, 2),
+            new Th("lorange", 0xFFFAF4EC, 0xFFE07B1F, 0, 0, 0, 2),
+            new Th("lblue", 0xFFEFF4FC, 0xFF2F6FD6, 0, 0, 0, 2),
+            new Th("lavender", 0xFFF4F1FA, 0xFF7356D0, 0, 0, ON_WHITE, 2),
+            new Th("matcha", 0xFFF1F5EC, 0xFF4F7F31, 0, 0, ON_WHITE, 2),
+            new Th("gold", 0xFF0C0B09, 0xFFD4AF37, 0xFFF7E7A1, 0xFFB08A2A, ON_DARK, 3),
+            new Th("platinum", 0xFF0F1013, 0xFFD9DCE1, 0xFFF7F8FA, 0xFF9EA3AB, ON_DARK, 3),
+            new Th("rosegold", 0xFF120D0D, 0xFFE8B4A0, 0xFFF9DCCF, 0xFFC48A78, ON_DARK, 3),
+            new Th("emerald", 0xFF04150F, 0xFFD1A954, 0xFFF3DC9A, 0xFFAA8436, ON_DARK, 3),
+            new Th("sapphire", 0xFF070C1F, 0xFFC9D2E3, 0xFFF2F5FA, 0xFF8C97AD, ON_DARK, 3),
+            new Th("ruby", 0xFF16060A, 0xFFD8B05C, 0xFFF6DE9E, 0xFFB08A3E, ON_DARK, 3),
+            new Th("bronze", 0xFF110C08, 0xFFD9975A, 0xFFF2C28E, 0xFFB57A44, ON_DARK, 3),
+            new Th("champagne", 0xFFF6EFE3, 0xFF7E6119, 0xFF9A7C2C, 0xFF5E4810, ON_WHITE, 3),
+            new Th("pearl", 0xFFF3F3F5, 0xFF555D6B, 0xFF707887, 0xFF3A404B, ON_WHITE, 3),
+    };
+    private int[] METAL;   // градиент акцента {светлый, средний, тёмный} или null
+    private boolean LUX;   // коллекция «Люкс»: металлические кнопки, кромка карточек, заголовки с бликом
 
     private int BG, PANEL, FIELD, FG, MUTED, ACCENT, BTN, ONACC;
     private boolean darkTheme;
@@ -650,15 +701,21 @@ public class MainActivity extends Activity {
     }
 
     private int themeIndex(String key) {
-        for (int i = 0; i < TH_KEY.length; i++) if (TH_KEY[i].equals(key)) return i;
+        for (int i = 0; i < THEMES.length; i++) if (THEMES[i].key.equals(key)) return i;
         return 0;
+    }
+
+    private String themeName(String key) {
+        if ("system".equals(key) || "dark".equals(key) || "light".equals(key)) return t("theme_" + key);
+        return t("th_" + key);
     }
 
     private void applyTheme() {
         String key = prefs.getString("theme", "system");
         int idx = themeIndex(key);
         if (idx == 0) idx = systemNight() ? 1 : 2;
-        int bg = TH_BG[idx], acc = TH_ACC[idx];
+        Th th = THEMES[idx];
+        int bg = th.bg, acc = th.acc;
         darkTheme = luma(bg) < 0.5;
         BG = bg;
         FG = darkTheme ? 0xFFF0F0F4 : 0xFF1B1D22;
@@ -667,13 +724,18 @@ public class MainActivity extends Activity {
         BTN = blend(bg, FG, 0.2f);
         MUTED = blend(bg, FG, 0.62f);
         ACCENT = acc;
-        ONACC = luma(acc) > 0.62 ? 0xFF1B1D22 : 0xFFFFFFFF;
-        float[] hsv = new float[3];
-        Color.colorToHSV(acc, hsv);
-        hsv[0] = (hsv[0] + 32f) % 360f;
-        hsv[1] = Math.min(1f, hsv[1] * 0.92f);
-        hsv[2] = Math.min(1f, hsv[2] * 1.06f);
-        ACCENT2 = Color.HSVToColor(hsv);
+        ONACC = th.on != 0 ? th.on : luma(acc) > 0.62 ? 0xFF1B1D22 : 0xFFFFFFFF;
+        METAL = th.metal() ? new int[]{th.hi, th.acc, th.lo} : null;
+        LUX = th.group == 3;
+        if (th.metal()) ACCENT2 = LUX ? th.hi : th.lo;
+        else {
+            float[] hsv = new float[3];
+            Color.colorToHSV(acc, hsv);
+            hsv[0] = (hsv[0] + 32f) % 360f;
+            hsv[1] = Math.min(1f, hsv[1] * 0.92f);
+            hsv[2] = Math.min(1f, hsv[2] * 1.06f);
+            ACCENT2 = Color.HSVToColor(hsv);
+        }
         // Рисуем под системными панелями: фон и «сияние» видны за статус-баром
         getWindow().setStatusBarColor(0x00000000);
         getWindow().setNavigationBarColor(0x00000000);
@@ -826,7 +888,8 @@ public class MainActivity extends Activity {
 
     // Крупный заголовок экрана
     private TextView headline(String text, float size) {
-        TextView g = new TextView(this);
+        // в «металлических» темах заголовок переливается, как гравировка
+        TextView g = METAL != null ? new GradText(this, METAL[0], LUX ? METAL[1] : METAL[2]) : new TextView(this);
         g.setText(text);
         g.setTextSize(size * 0.9f * fontScale);
         g.setTextColor(FG);
@@ -837,10 +900,20 @@ public class MainActivity extends Activity {
         return g;
     }
 
-    private GradientDrawable accentBg(int radius) { return round(ACCENT, radius); }
+    // Акцентная заливка; у «металлических» тем — диагональный блик (золото, платина, неон…)
+    private GradientDrawable accentBg(int radius) {
+        if (METAL == null) return round(ACCENT, radius);
+        GradientDrawable d = new GradientDrawable(GradientDrawable.Orientation.TL_BR, METAL);
+        d.setCornerRadius(dp(radius));
+        return d;
+    }
 
-    // Карточка «стекло»: фон панели + тонкая светлая кромка
-    private GradientDrawable panel(int radius) { return round(PANEL, radius); }
+    // Карточка: фон панели; в коллекции «Люкс» — тонкая металлическая кромка
+    private GradientDrawable panel(int radius) {
+        GradientDrawable d = round(PANEL, radius);
+        if (LUX) d.setStroke(Math.max(1, dp(1)), (ACCENT & 0x00FFFFFF) | 0x47000000);
+        return d;
+    }
 
     // Цветная тень (Android 9+)
     private void glow(View v, int color, int elev) { }
@@ -1290,7 +1363,7 @@ public class MainActivity extends Activity {
         FrameLayout barInner = new FrameLayout(this);
         barInner.addView(bar, new FrameLayout.LayoutParams(-1, -1));
         View hair = new View(this);
-        hair.setBackgroundColor((FG & 0x00FFFFFF) | 0x1A000000);
+        hair.setBackgroundColor(LUX ? (ACCENT & 0x00FFFFFF) | 0x59000000 : (FG & 0x00FFFFFF) | 0x1A000000);
         barInner.addView(hair, new FrameLayout.LayoutParams(-1, Math.max(1, dp(1) / 2), Gravity.TOP));
         barWrap.addView(barInner, new FrameLayout.LayoutParams(-1, dp(62), Gravity.TOP));
         barWrapRef = barWrap;
@@ -5929,29 +6002,37 @@ public class MainActivity extends Activity {
 
         setBox.addView(sectionLabel(R.drawable.ic_palette, t("set_appearance")));
         setBox.addView(tv(t("set_theme"), 15, FG, true));
-        Flow themeFlow = new Flow(this, dp(14), dp(10));
         String cur = prefs.getString("theme", "system");
-        String[] caps = {t("theme_system"), t("theme_dark"), t("theme_light")};
-        for (int i = 0; i < TH_KEY.length; i++) {
-            final int ti = i;
-            LinearLayout cell = new LinearLayout(this);
-            cell.setOrientation(LinearLayout.VERTICAL);
-            cell.setGravity(Gravity.CENTER_HORIZONTAL);
-            int c1 = i == 0 ? 0xFF18191D : TH_BG[i];
-            int c2 = i == 0 ? 0xFFF4F5F8 : TH_ACC[i];
-            Swatch sw = new Swatch(this, c1, c2, ACCENT, TH_KEY[i].equals(cur), dp(10));
-            cell.addView(sw, new LinearLayout.LayoutParams(dp(46), dp(46)));
-            if (i < 3) {
-                TextView cap = tv(caps[i], 10.5f, MUTED, false);
+        String[] grpNames = {t("th_grp_basic"), t("th_grp_dark"), t("th_grp_light"), t("th_grp_lux")};
+        for (int g = 0; g < grpNames.length; g++) {
+            TextView gl = tv(grpNames[g], 12.5f, g == 3 ? ACCENT : MUTED, true);
+            gl.setPadding(dp(2), dp(g == 0 ? 8 : 14), 0, dp(8));
+            setBox.addView(gl, new LinearLayout.LayoutParams(-1, -2));
+            Flow themeFlow = new Flow(this, dp(8), dp(10));
+            for (int i = 0; i < THEMES.length; i++) {
+                final Th th = THEMES[i];
+                if (th.group != g) continue;
+                boolean on = th.key.equals(cur);
+                LinearLayout cell = new LinearLayout(this);
+                cell.setOrientation(LinearLayout.VERTICAL);
+                cell.setGravity(Gravity.CENTER_HORIZONTAL);
+                int c1 = i == 0 ? 0xFF18191D : th.bg;
+                int c2 = i == 0 ? 0xFFF4F5F8 : th.acc;
+                Swatch sw = new Swatch(this, c1, c2, ACCENT, on, dp(12));
+                if (th.metal()) sw.metal = new int[]{th.hi, th.acc, th.lo};
+                cell.addView(sw, new LinearLayout.LayoutParams(dp(48), dp(48)));
+                TextView cap = tv(themeName(th.key), 10.5f, on ? ACCENT : MUTED, on);
                 cap.setGravity(Gravity.CENTER);
-                cell.addView(cap, new LinearLayout.LayoutParams(dp(64), -2));
+                cap.setMaxLines(2);
+                cap.setEllipsize(TextUtils.TruncateAt.END);
+                cap.setPadding(0, dp(3), 0, 0);
+                cell.addView(cap, new LinearLayout.LayoutParams(dp(68), -2));
+                cell.setContentDescription(themeName(th.key));
+                cell.setOnClickListener(v -> { prefs.edit().putString("theme", th.key).apply(); recreate(); });
+                themeFlow.addView(cell);
             }
-            cell.setOnClickListener(v -> { prefs.edit().putString("theme", TH_KEY[ti]).apply(); recreate(); });
-            themeFlow.addView(cell);
+            setBox.addView(themeFlow, new LinearLayout.LayoutParams(-1, -2));
         }
-        LinearLayout.LayoutParams tfp = new LinearLayout.LayoutParams(-1, -2);
-        tfp.topMargin = dp(8);
-        setBox.addView(themeFlow, tfp);
 
         TextView fontLbl = tv(t("font_title"), 15, FG, true);
         LinearLayout.LayoutParams fnp = new LinearLayout.LayoutParams(-1, -2);
@@ -6870,7 +6951,7 @@ public class MainActivity extends Activity {
         c10.addView(cardTitle(t("st_app")));
         c10.addView(statRow(t("st_version"), "v" + appVersion()));
         c10.addView(statRow(t("st_pin"), hasPin() ? t("pin_on") : t("pin_off")));
-        c10.addView(statRow(t("st_theme"), prefs.getString("theme", "system")));
+        c10.addView(statRow(t("st_theme"), themeName(prefs.getString("theme", "system"))));
         c10.addView(statRow(t("set_columns"), String.valueOf(cols)));
         c10.addView(statRow(t("st_thumbs"), String.valueOf(thumbCache.size())));
         addCard(body, c10);
@@ -7868,6 +7949,7 @@ public class MainActivity extends Activity {
         ui.postDelayed(() -> {
             if (isFinishing() || dialogShowing() || (lockView != null && lockView.getVisibility() == View.VISIBLE)) return;
             sheet2(tf("wn_title", v), t("wn_sub"), t("wn_ok"),
+                    new Act("🎨", t("wn_themes"), t("wn_themes_d"), 0, () -> showTab(3)),
                     new Act("🎬", t("wn_reels"), t("wn_reels_d"), 0, () -> openReels(filtered(), 0)),
                     new Act("🔍", t("wn_search"), t("wn_search_d"), 0, this::openSearch),
                     new Act("▣", t("wn_grid"), t("wn_grid_d"), 0, () -> showTab(0)),

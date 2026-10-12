@@ -874,4 +874,75 @@ final class Strings {
         a("wn_smart_d", "Videos, GIFs, untagged, recent — and a manager to rename, merge or delete tags", "Видео, GIF, без тегов, недавние — и менеджер для переименования, объединения и удаления тегов", "Vídeos, GIF, sin etiquetas, recientes, y un gestor para renombrar, fusionar o borrar etiquetas", "ویدیو، GIF، بدون برچسب، اخیر — و مدیر برچسب برای تغییر نام، ادغام یا حذف");
         b("wn_smart_d", "Videos, GIFs, ohne Tags, neu – und eine Tag-Verwaltung zum Umbenennen, Zusammenführen und Löschen", "Vidéos, GIF, sans tags, récents — et un gestionnaire pour renommer, fusionner ou supprimer les tags", "视频、GIF、无标签、最近添加，以及可重命名、合并、删除标签的管理器", "動画・GIF・タグなし・最近追加、さらにタグの名前変更・統合・削除");
     }
+
+    static { v31(); }
+
+    private static void v31() {
+        a("th_grp_basic", "Basic", "Основные", "Básicos", "پایه");
+        b("th_grp_basic", "Basis", "De base", "基础", "基本");
+        a("th_grp_dark", "Dark & colorful", "Тёмные цветные", "Oscuros de color", "تیرهٔ رنگی");
+        b("th_grp_dark", "Dunkel & farbig", "Sombres colorés", "深色彩色", "ダーク・カラー");
+        a("th_grp_light", "Light", "Светлые", "Claros", "روشن");
+        b("th_grp_light", "Hell", "Claires", "浅色", "ライト");
+        a("th_grp_lux", "✦ Luxury", "✦ Люкс", "✦ Lujo", "✦ لوکس");
+        b("th_grp_lux", "✦ Luxus", "✦ Luxe", "✦ 奢华", "✦ ラグジュアリー");
+        a("th_black", "Black", "Чёрная", "Negro", "سیاه");
+        b("th_black", "Schwarz", "Noir", "纯黑", "ブラック");
+        a("th_teal", "Teal", "Бирюза", "Turquesa", "فیروزه‌ای");
+        b("th_teal", "Petrol", "Sarcelle", "青绿", "ティール");
+        a("th_orange", "Amber", "Янтарь", "Ámbar", "کهربایی");
+        b("th_orange", "Bernstein", "Ambre", "琥珀", "アンバー");
+        a("th_rose", "Rose", "Роза", "Rosa", "رز");
+        b("th_rose", "Rose", "Rose", "玫瑰", "ローズ");
+        a("th_green", "Forest", "Лес", "Bosque", "جنگل");
+        b("th_green", "Wald", "Forêt", "森林", "フォレスト");
+        a("th_navy", "Navy", "Ночь", "Marino", "سرمه‌ای");
+        b("th_navy", "Marine", "Marine", "藏青", "ネイビー");
+        a("th_ocean", "Ocean", "Океан", "Océano", "اقیانوس");
+        b("th_ocean", "Ozean", "Océan", "海洋", "オーシャン");
+        a("th_nord", "Nord", "Норд", "Nord", "نورد");
+        b("th_nord", "Nord", "Nord", "北欧", "ノルド");
+        a("th_dracula", "Dracula", "Дракула", "Drácula", "دراکولا");
+        b("th_dracula", "Dracula", "Dracula", "德古拉", "ドラキュラ");
+        a("th_coffee", "Coffee", "Кофе", "Café", "قهوه");
+        b("th_coffee", "Kaffee", "Café", "咖啡", "コーヒー");
+        a("th_neon", "Neon", "Неон", "Neón", "نئون");
+        b("th_neon", "Neon", "Néon", "霓虹", "ネオン");
+        a("th_sunset", "Sunset", "Закат", "Atardecer", "غروب");
+        b("th_sunset", "Sonnenuntergang", "Coucher de soleil", "日落", "サンセット");
+        a("th_lrose", "Blossom", "Цветение", "Flor", "شکوفه");
+        b("th_lrose", "Blüte", "Fleur", "花开", "ブロッサム");
+        a("th_lteal", "Mint", "Мята", "Menta", "نعناع");
+        b("th_lteal", "Minze", "Menthe", "薄荷", "ミント");
+        a("th_lorange", "Apricot", "Абрикос", "Albaricoque", "زردآلو");
+        b("th_lorange", "Aprikose", "Abricot", "杏色", "アプリコット");
+        a("th_lblue", "Sky", "Небо", "Cielo", "آسمان");
+        b("th_lblue", "Himmel", "Ciel", "天空", "スカイ");
+        a("th_lavender", "Lavender", "Лаванда", "Lavanda", "اسطوخودوس");
+        b("th_lavender", "Lavendel", "Lavande", "薰衣草", "ラベンダー");
+        a("th_matcha", "Matcha", "Матча", "Matcha", "ماچا");
+        b("th_matcha", "Matcha", "Matcha", "抹茶", "抹茶");
+        a("th_gold", "Black gold", "Чёрное золото", "Oro negro", "طلای سیاه");
+        b("th_gold", "Schwarzgold", "Or noir", "黑金", "ブラックゴールド");
+        a("th_platinum", "Platinum", "Платина", "Platino", "پلاتین");
+        b("th_platinum", "Platin", "Platine", "铂金", "プラチナ");
+        a("th_rosegold", "Rose gold", "Розовое золото", "Oro rosa", "رزگلد");
+        b("th_rosegold", "Roségold", "Or rose", "玫瑰金", "ローズゴールド");
+        a("th_emerald", "Emerald", "Изумруд", "Esmeralda", "زمرد");
+        b("th_emerald", "Smaragd", "Émeraude", "祖母绿", "エメラルド");
+        a("th_sapphire", "Sapphire", "Сапфир", "Zafiro", "یاقوت کبود");
+        b("th_sapphire", "Saphir", "Saphir", "蓝宝石", "サファイア");
+        a("th_ruby", "Ruby", "Рубин", "Rubí", "یاقوت سرخ");
+        b("th_ruby", "Rubin", "Rubis", "红宝石", "ルビー");
+        a("th_bronze", "Bronze", "Бронза", "Bronce", "برنز");
+        b("th_bronze", "Bronze", "Bronze", "青铜", "ブロンズ");
+        a("th_champagne", "Champagne", "Шампань", "Champán", "شامپاین");
+        b("th_champagne", "Champagner", "Champagne", "香槟", "シャンパン");
+        a("th_pearl", "Pearl", "Жемчуг", "Perla", "مروارید");
+        b("th_pearl", "Perle", "Perle", "珍珠", "パール");
+        a("wn_themes", "29 themes, including Luxury", "29 тем, включая «Люкс»", "29 temas, incluido Lujo", "۲۹ پوسته، از جمله لوکس");
+        b("wn_themes", "29 Designs, inklusive Luxus", "29 thèmes, dont Luxe", "29 款主题，含奢华系列", "ラグジュアリーを含む29テーマ");
+        a("wn_themes_d", "Platinum, black gold, rose gold, emerald, sapphire… with metallic buttons and engraved headlines", "Платина, чёрное золото, розовое золото, изумруд, сапфир… с металлическими кнопками и «гравированными» заголовками", "Platino, oro negro, oro rosa, esmeralda, zafiro… con botones metálicos y títulos grabados", "پلاتین، طلای سیاه، رزگلد، زمرد، یاقوت… با دکمه‌های فلزی و عنوان‌های حکاکی‌شده");
+        b("wn_themes_d", "Platin, Schwarzgold, Roségold, Smaragd, Saphir … mit Metall-Buttons und gravierten Überschriften", "Platine, or noir, or rose, émeraude, saphir… boutons métalliques et titres gravés", "铂金、黑金、玫瑰金、祖母绿、蓝宝石……金属质感按钮与镌刻标题", "プラチナ、ブラックゴールド、ローズゴールド、エメラルド、サファイア… メタリックなボタンと刻印風の見出し");
+    }
 }
