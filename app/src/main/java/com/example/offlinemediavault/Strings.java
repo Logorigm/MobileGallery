@@ -663,5 +663,9 @@ final class Strings {
         b("crash_copy", "Bericht kopieren", "Copier le rapport", "复制报告", "レポートをコピー");
         a("crash_copied", "Report copied", "Отчёт скопирован", "Informe copiado", "گزارش کپی شد");
         b("crash_copied", "Bericht kopiert", "Rapport copié", "报告已复制", "コピーしました");
+        a("hero_add", "Add photos & videos", "Добавить фото и видео", "Añadir fotos y vídeos", "افزودن عکس و ویدیو");
+        b("hero_add", "Fotos & Videos hinzufügen", "Ajouter photos et vidéos", "添加照片和视频", "写真と動画を追加");
+        a("hero_add_sub", "Everything stays on this phone only", "Всё хранится только на этом телефоне", "Todo se queda solo en este teléfono", "همه‌چیز فقط روی همین گوشی می‌ماند");
+        b("hero_add_sub", "Alles bleibt nur auf diesem Handy", "Tout reste uniquement sur ce téléphone", "所有内容仅保存在本机", "すべてこの端末内にのみ保存");
     }
 }

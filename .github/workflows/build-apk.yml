@@ -32,5 +32,5 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: OfflineMediaVault-2.0-release-apk
+          name: OfflineMediaVault-release-apk
           path: app/build/outputs/apk/release/app-release.apk

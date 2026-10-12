@@ -20,6 +20,10 @@ import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
+import android.graphics.Color;
+import android.graphics.LinearGradient;
+import android.graphics.RadialGradient;
+import android.graphics.Shader;
 import android.graphics.Matrix;
 import android.graphics.Outline;
 import android.graphics.Paint;
@@ -31,6 +35,7 @@ import android.graphics.drawable.Drawable;
 import android.graphics.drawable.RippleDrawable;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.Icon;
+import android.graphics.drawable.LayerDrawable;
 import android.graphics.drawable.InsetDrawable;
 import android.graphics.pdf.PdfRenderer;
 import android.media.MediaMetadataRetriever;
@@ -107,6 +112,132 @@ public class MainActivity extends Activity {
 
     static class Thumb { Bitmap bmp; long dur; int pages; }
     static class PdfHolder { PdfRenderer r; ParcelFileDescriptor pfd; int pages = 0, page = 0; }
+
+    /** Единый набор векторных иконок вместо текстовых символов и эмодзи. */
+    static int glyphRes(CharSequence t) {
+        if (t == null) return 0;
+        switch (t.toString()) {
+            case "✕": case "✖": return R.drawable.ic_close;
+            case "←": return R.drawable.ic_back;
+            case "✎": return R.drawable.ic_edit;
+            case "⋯": return R.drawable.ic_more;
+            case "🔍": return R.drawable.ic_search;
+            case "▶": return R.drawable.ic_play;
+            case "♥": return R.drawable.ic_heart;
+            case "♡": return R.drawable.ic_heart_outline;
+            case "▣": case "▦": return R.drawable.ic_album;
+            case "🗑": return R.drawable.ic_delete;
+            case "🔒": return R.drawable.ic_lock;
+            case "✓": return R.drawable.ic_check;
+            case "☑": return R.drawable.ic_checkbox;
+            case "☐": return R.drawable.ic_checkbox_blank;
+            case "⌫": return R.drawable.ic_backspace;
+            case "‹": case "◀": return R.drawable.ic_chevron_left;
+            case "›": return R.drawable.ic_chevron_right;
+            case "＋": case "+": return R.drawable.ic_add;
+            case "−": return R.drawable.ic_remove;
+            case "↑": return R.drawable.ic_arrow_up;
+            default: return 0;
+        }
+    }
+
+    /** Текстовая кнопка, которая рисует векторную иконку, если её текст — известный символ. */
+    static class GlyphView extends TextView {
+        private Drawable ico;
+        private int tint = 0xFFFFFFFF;
+
+        GlyphView(Context c) { super(c); }
+
+        @Override public void setText(CharSequence text, BufferType type) {
+            int res = glyphRes(text);
+            if (res != 0) {
+                Drawable d = getContext().getDrawable(res);
+                ico = d == null ? null : d.mutate();
+                if (ico != null) ico.setTint(tint);
+                super.setText("", type);
+                invalidate();
+                requestLayout();
+            } else {
+                ico = null;
+                super.setText(text, type);
+            }
+        }
+
+        @Override public void setTextColor(int color) {
+            tint = color;
+            if (ico != null) { ico.setTint(color); invalidate(); }
+            super.setTextColor(color);
+        }
+
+        private int icoSize() { return (int) (getTextSize() * 1.2f); }
+
+        @Override protected void onMeasure(int w, int h) {
+            super.onMeasure(w, h);
+            if (ico == null) return;
+            int sz = icoSize();
+            int mw = Math.max(getMeasuredWidth(), sz + getPaddingLeft() + getPaddingRight());
+            int mh = Math.max(getMeasuredHeight(), sz + getPaddingTop() + getPaddingBottom());
+            setMeasuredDimension(resolveSize(mw, w), resolveSize(mh, h));
+        }
+
+        @Override protected void onDraw(Canvas c) {
+            super.onDraw(c);
+            if (ico == null) return;
+            int aw = getWidth() - getPaddingLeft() - getPaddingRight(), ah = getHeight() - getPaddingTop() - getPaddingBottom();
+            int sz = Math.min(icoSize(), Math.min(aw, ah));
+            if (sz <= 0) return;
+            int cx = getPaddingLeft() + aw / 2, cy = getPaddingTop() + ah / 2;
+            ico.setBounds(cx - sz / 2, cy - sz / 2, cx - sz / 2 + sz, cy - sz / 2 + sz);
+            ico.draw(c);
+        }
+    }
+
+    /** Заголовок с мягким градиентом текста. */
+    static class GradText extends TextView {
+        final int c1, c2;
+
+        GradText(Context c, int a, int b) { super(c); c1 = a; c2 = b; }
+
+        private void shade() {
+            float tw = getPaint().measureText(String.valueOf(getText()));
+            float w = Math.max(1f, Math.min(getWidth() > 0 ? getWidth() : tw, tw));
+            getPaint().setShader(new LinearGradient(0, 0, w, 0, c1, c2, Shader.TileMode.CLAMP));
+            invalidate();
+        }
+
+        @Override protected void onSizeChanged(int w, int h, int ow, int oh) { super.onSizeChanged(w, h, ow, oh); shade(); }
+
+        @Override protected void onTextChanged(CharSequence text, int start, int before, int after) {
+            super.onTextChanged(text, start, before, after);
+            if (getWidth() > 0) shade();
+        }
+    }
+
+    /** «Северное сияние»: мягкие цветные пятна акцента на фоне. */
+    static class Aurora extends View {
+        private final int a1, a2;
+        private final boolean dark;
+        private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private Shader s1, s2, s3;
+
+        Aurora(Context c, int a1, int a2, boolean dark) { super(c); this.a1 = a1; this.a2 = a2; this.dark = dark; }
+
+        private static int al(int c, int a) { return (c & 0x00FFFFFF) | (a << 24); }
+
+        @Override protected void onSizeChanged(int w, int h, int ow, int oh) {
+            super.onSizeChanged(w, h, ow, oh);
+            if (w <= 0 || h <= 0) return;
+            int a = dark ? 0x40 : 0x2C;
+            s1 = new RadialGradient(w * 0.12f, h * 0.06f, w * 0.95f, al(a1, a), al(a1, 0), Shader.TileMode.CLAMP);
+            s2 = new RadialGradient(w * 1.0f, h * 0.48f, w * 0.85f, al(a2, a * 3 / 4), al(a2, 0), Shader.TileMode.CLAMP);
+            s3 = new RadialGradient(w * 0.25f, h * 1.02f, w * 0.9f, al(a1, a / 2), al(a1, 0), Shader.TileMode.CLAMP);
+        }
+
+        @Override protected void onDraw(Canvas c) {
+            if (s1 == null) return;
+            for (Shader sh : new Shader[]{s1, s2, s3}) { p.setShader(sh); c.drawRect(0, 0, getWidth(), getHeight(), p); }
+        }
+    }
 
     /** Маленький квадратик темы: две половины (фон и акцент). */
     static class Swatch extends View {
@@ -261,6 +392,7 @@ public class MainActivity extends Activity {
     @Override public void onCreate(Bundle b) {
         super.onCreate(b);
         prefs = getSharedPreferences("omv_settings", 0);
+        loadFonts();
         cols = Math.max(1, Math.min(4, prefs.getInt("cols", 2)));
         showNames = prefs.getBoolean("names", true);
         applyTheme();
@@ -451,12 +583,24 @@ public class MainActivity extends Activity {
         MUTED = blend(bg, FG, 0.62f);
         ACCENT = acc;
         ONACC = luma(acc) > 0.62 ? 0xFF1B1D22 : 0xFFFFFFFF;
-        getWindow().setStatusBarColor(BG);
-        getWindow().setNavigationBarColor(BG);
+        float[] hsv = new float[3];
+        Color.colorToHSV(acc, hsv);
+        hsv[0] = (hsv[0] + 32f) % 360f;
+        hsv[1] = Math.min(1f, hsv[1] * 0.92f);
+        hsv[2] = Math.min(1f, hsv[2] * 1.06f);
+        ACCENT2 = Color.HSVToColor(hsv);
+        // Рисуем под системными панелями: фон и «сияние» видны за статус-баром
+        getWindow().setStatusBarColor(0x00000000);
+        getWindow().setNavigationBarColor(0x00000000);
+        if (Build.VERSION.SDK_INT >= 29) {
+            getWindow().setNavigationBarContrastEnforced(false);
+            getWindow().setStatusBarContrastEnforced(false);
+        }
         View decor = getWindow().getDecorView();
         decor.setBackgroundColor(BG);
         int f = decor.getSystemUiVisibility();
         if (!darkTheme) f |= 0x2000 | 0x10; else f &= ~(0x2000 | 0x10);
+        f |= View.SYSTEM_UI_FLAG_LAYOUT_STABLE | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION;
         decor.setSystemUiVisibility(f);
     }
 
@@ -495,7 +639,7 @@ public class MainActivity extends Activity {
             sb.addView(a, new LinearLayout.LayoutParams(-2, -2));
         }
         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM);
-        lp.setMargins(dp(12), 0, dp(12), shell.getPaddingBottom() + dp(74));
+        lp.setMargins(dp(12), 0, dp(12), navInset + shell.getPaddingBottom() + dp(74));
         appRoot.addView(sb, lp);
         snackView = sb;
         sb.setAlpha(0f);
@@ -531,19 +675,96 @@ public class MainActivity extends Activity {
         return d;
     }
 
+    // ---------- Дизайн-система ----------
+    private static Typeface TF_REG, TF_MED, TF_SEMI, TF_DISP;
+    private static String fontLang = null;
+    private int ACCENT2;
+    private Aurora aurora;
+    private FrameLayout barWrapRef;
+    private int navInset = 0;
+
+    // Шрифт Inter (латиница и кириллица); для фарси, китайского и японского — системный
+    private void loadFonts() {
+        if (lang.equals(fontLang)) return;
+        fontLang = lang;
+        TF_REG = TF_MED = TF_SEMI = TF_DISP = null;
+        if ("fa".equals(lang) || "zh".equals(lang) || "ja".equals(lang)) return;
+        try {
+            TF_REG = Typeface.createFromAsset(getAssets(), "fonts/Inter-Regular.ttf");
+            TF_MED = Typeface.createFromAsset(getAssets(), "fonts/Inter-Medium.ttf");
+            TF_SEMI = Typeface.createFromAsset(getAssets(), "fonts/Inter-SemiBold.ttf");
+            TF_DISP = Typeface.createFromAsset(getAssets(), "fonts/InterDisplay-Bold.ttf");
+        } catch (Throwable e) {
+            TF_REG = TF_MED = TF_SEMI = TF_DISP = null;
+        }
+    }
+
+    private Typeface boldFace() { return TF_SEMI != null ? TF_SEMI : Typeface.DEFAULT_BOLD; }
+
+    private Typeface dispFace() { return TF_DISP != null ? TF_DISP : Typeface.DEFAULT_BOLD; }
+
     private TextView tv(String text, float size, int color, boolean bold) {
-        TextView v = new TextView(this);
+        TextView v = glyphRes(text) != 0 ? new GlyphView(this) : new TextView(this);
         v.setText(text);
         v.setTextSize(size);
         v.setTextColor(color);
-        if (bold) v.setTypeface(null, Typeface.BOLD);
+        if (bold) v.setTypeface(boldFace());
+        else if (TF_REG != null) v.setTypeface(TF_REG);
         return v;
+    }
+
+    // Крупный заголовок экрана
+    private TextView headline(String text, float size) {
+        GradText g = new GradText(this, FG, blend(FG, ACCENT, 0.75f));
+        g.setText(text);
+        g.setTextSize(size);
+        g.setTextColor(FG);
+        g.setTypeface(dispFace());
+        g.setLetterSpacing(-0.015f);
+        g.setSingleLine(true);
+        g.setEllipsize(TextUtils.TruncateAt.END);
+        return g;
+    }
+
+    private GradientDrawable accentBg(int radius) {
+        GradientDrawable g = new GradientDrawable(GradientDrawable.Orientation.TL_BR, new int[]{ACCENT, ACCENT2});
+        g.setCornerRadius(dp(radius));
+        return g;
+    }
+
+    // Карточка «стекло»: фон панели + тонкая светлая кромка
+    private GradientDrawable panel(int radius) {
+        GradientDrawable g = round(PANEL, radius);
+        g.setStroke(Math.max(1, dp(1) / 2 + 1), (FG & 0x00FFFFFF) | (darkTheme ? 0x16000000 : 0x12000000));
+        return g;
+    }
+
+    // Цветная тень (Android 9+)
+    private void glow(View v, int color, int elev) {
+        v.setElevation(dp(elev));
+        if (Build.VERSION.SDK_INT >= 28) {
+            v.setOutlineSpotShadowColor(color);
+            v.setOutlineAmbientShadowColor(color);
+        }
+    }
+
+    private Drawable icon(int res, int tint) {
+        Drawable d = getDrawable(res).mutate();
+        d.setTint(tint);
+        return d;
+    }
+
+    private void startIcon(TextView v, int res, int tint) {
+        Drawable d = icon(res, tint);
+        d.setBounds(0, 0, dp(18), dp(18));
+        v.setCompoundDrawablesRelative(d, null, null, null);
+        v.setCompoundDrawablePadding(dp(6));
     }
 
     private TextView button(String text) {
         TextView b = tv(text, 14, FG, true);
         b.setGravity(Gravity.CENTER);
-        b.setBackground(round(BTN, 12));
+        b.setBackground(round(BTN, 14));
         b.setPadding(dp(8), 0, dp(8), 0);
         pressFx(b);
         return b;
@@ -552,7 +773,8 @@ public class MainActivity extends Activity {
     private TextView primaryButton(String text) {
         TextView b = button(text);
         b.setTextColor(ONACC);
-        b.setBackground(round(ACCENT, 12));
+        b.setBackground(accentBg(14));
+        glow(b, ACCENT, 4);
         return b;
     }
 
@@ -560,12 +782,22 @@ public class MainActivity extends Activity {
 
     // Переключатель-«тумблер»
     private TextView toggleChip(boolean on) {
-        TextView c = tv("●", 17, 0xFFFFFFFF, false);
-        c.setGravity((on ? Gravity.END : Gravity.START) | Gravity.CENTER_VERTICAL);
-        c.setPadding(dp(5), 0, dp(5), 0);
-        c.setBackground(round(on ? ACCENT : blend(PANEL, FG, 0.22f), 15));
+        TextView c = tv("", 1, 0x00000000, false);
+        GradientDrawable track = on ? accentBg(16) : round(blend(PANEL, FG, 0.2f), 16);
+        GradientDrawable knob = new GradientDrawable();
+        knob.setShape(GradientDrawable.OVAL);
+        knob.setColor(0xFFFFFFFF);
+        if (!on) knob.setStroke(1, 0x22000000);
+        LayerDrawable ld = new LayerDrawable(new Drawable[]{track, knob});
+        ld.setLayerInset(1, dp(3), dp(3), dp(3), dp(3));
+        ld.setLayerSize(1, dp(24), dp(24));
+        ld.setLayerGravity(1, (on ? Gravity.RIGHT : Gravity.LEFT) | Gravity.CENTER_VERTICAL);
+        c.setBackground(ld);
         c.setMinWidth(dp(52));
         c.setMinHeight(dp(30));
+        c.setMinimumWidth(dp(52));
+        c.setMinimumHeight(dp(30));
+        if (on) glow(c, ACCENT, 2);
         pressFx(c);
         return c;
     }
@@ -573,7 +805,8 @@ public class MainActivity extends Activity {
     private TextView chip(String text, boolean on, int onColor) {
         TextView c = tv(text, 13, on ? (onColor == RED ? 0xFFFFFFFF : ONACC) : FG, false);
         c.setPadding(dp(14), dp(8), dp(14), dp(8));
-        c.setBackground(round(on ? onColor : FIELD, 18));
+        c.setBackground(on && onColor == ACCENT ? accentBg(18) : round(on ? onColor : FIELD, 18));
+        if (on && TF_MED != null) c.setTypeface(TF_MED);
         pressFx(c);
         return c;
     }
@@ -631,6 +864,15 @@ public class MainActivity extends Activity {
         if (w == null) return;
         w.setWindowAnimations(style);
         if (prefs.getBoolean("no_shots", false)) w.addFlags(WindowManager.LayoutParams.FLAG_SECURE);
+        if (Build.VERSION.SDK_INT >= 31 && (style == R.style.OmvPopAnim || style == R.style.OmvSheetAnim)) {
+            try {
+                w.addFlags(WindowManager.LayoutParams.FLAG_BLUR_BEHIND | WindowManager.LayoutParams.FLAG_DIM_BEHIND);
+                WindowManager.LayoutParams lp = w.getAttributes();
+                lp.setBlurBehindRadius(dp(22));
+                lp.dimAmount = 0.32f;
+                w.setAttributes(lp);
+            } catch (Throwable ignored) { }
+        }
     }
 
     // Применяет эффект нажатия ко всем кликабельным видам внутри
@@ -698,7 +940,8 @@ public class MainActivity extends Activity {
             ic.setGravity(Gravity.CENTER);
             GradientDrawable og = new GradientDrawable();
             og.setShape(GradientDrawable.OVAL);
-            og.setColor(col);
+            if (a.color == 0) { og.setColors(new int[]{ACCENT, ACCENT2}); og.setOrientation(GradientDrawable.Orientation.TL_BR); }
+            else og.setColor(col);
             ic.setBackground(og);
             row.addView(ic, new LinearLayout.LayoutParams(dp(40), dp(40)));
             LinearLayout tx = new LinearLayout(this);
@@ -765,7 +1008,7 @@ public class MainActivity extends Activity {
             TextView b = tv(labels[i], 13, i == selected ? ONACC : FG, true);
             b.setGravity(Gravity.CENTER);
             b.setPadding(dp(8), dp(10), dp(8), dp(10));
-            if (i == selected) b.setBackground(round(ACCENT, 20));
+            if (i == selected) b.setBackground(accentBg(20));
             b.setOnClickListener(v -> cb.on(k));
             row.addView(b, new LinearLayout.LayoutParams(0, -2, 1));
         }
@@ -777,7 +1020,24 @@ public class MainActivity extends Activity {
         e.setHintTextColor(MUTED);
         e.setTextSize(14);
         e.setPadding(dp(12), 0, dp(12), 0);
-        e.setBackground(round(FIELD, 12));
+        e.setBackground(round(FIELD, 14));
+        if (TF_REG != null) e.setTypeface(TF_REG);
+    }
+
+    private View sectionLabel(String emoji, String s) {
+        LinearLayout row = new LinearLayout(this);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(4), dp(20), 0, dp(10));
+        TextView ic = tv(emoji, 14, FG, false);
+        ic.setGravity(Gravity.CENTER);
+        ic.setBackground(round(blend(BG, ACCENT, darkTheme ? 0.24f : 0.16f), 9));
+        row.addView(ic, new LinearLayout.LayoutParams(dp(28), dp(28)));
+        TextView l = tv(s, 12, MUTED, true);
+        l.setLetterSpacing(0.08f);
+        l.setPadding(dp(10), 0, 0, 0);
+        row.addView(l, new LinearLayout.LayoutParams(0, -2, 1));
+        row.setTag("sec");
+        return row;
     }
 
     private TextView sectionLabel(String s) {
@@ -795,12 +1055,12 @@ public class MainActivity extends Activity {
         if (bt == null) return;
         bt.setAllCaps(false);
         bt.setTextSize(14.5f);
-        bt.setTypeface(null, Typeface.BOLD);
+        bt.setTypeface(boldFace());
         bt.setMinHeight(0);
         bt.setMinWidth(dp(72));
         bt.setPadding(dp(18), dp(11), dp(18), dp(11));
         bt.setTextColor(primary || danger ? (danger ? 0xFFFFFFFF : ONACC) : FG);
-        bt.setBackground(round(danger ? RED : primary ? ACCENT : BTN, 14));
+        bt.setBackground(danger ? round(RED, 14) : primary ? accentBg(14) : round(BTN, 14));
     }
 
     // Единый красивый вид для всех диалогов
@@ -814,9 +1074,9 @@ public class MainActivity extends Activity {
         View dv = w.getDecorView();
         int tid = getResources().getIdentifier("alertTitle", "id", "android");
         View ttl = tid != 0 ? dv.findViewById(tid) : null;
-        if (ttl instanceof TextView) { TextView x = (TextView) ttl; x.setTextColor(FG); x.setTextSize(19); x.setTypeface(null, Typeface.BOLD); }
+        if (ttl instanceof TextView) { TextView x = (TextView) ttl; x.setTextColor(FG); x.setTextSize(19); x.setTypeface(dispFace()); }
         View msg = dv.findViewById(android.R.id.message);
-        if (msg instanceof TextView) { TextView x = (TextView) msg; x.setTextColor(blend(FG, PANEL, 0.2f)); x.setTextSize(15); x.setLineSpacing(0, 1.12f); }
+        if (msg instanceof TextView) { TextView x = (TextView) msg; if (TF_REG != null) x.setTypeface(TF_REG); x.setTextColor(blend(FG, PANEL, 0.2f)); x.setTextSize(15); x.setLineSpacing(0, 1.12f); }
         Button pos = d.getButton(AlertDialog.BUTTON_POSITIVE);
         boolean danger = false;
         if (pos != null) {
@@ -885,7 +1145,14 @@ public class MainActivity extends Activity {
         shell.setOrientation(LinearLayout.VERTICAL);
         shell.setBackgroundColor(0x00000000);
         shell.setOnApplyWindowInsetsListener((v, insets) -> {
-            v.setPadding(insets.getSystemWindowInsetLeft(), insets.getSystemWindowInsetTop(), insets.getSystemWindowInsetRight(), insets.getSystemWindowInsetBottom());
+            int sys = insets.getSystemWindowInsetBottom();
+            navInset = Math.min(insets.getStableInsetBottom(), sys);
+            v.setPadding(insets.getSystemWindowInsetLeft(), insets.getSystemWindowInsetTop(), insets.getSystemWindowInsetRight(), sys - navInset);
+            if (barWrapRef != null) {
+                barWrapRef.setPadding(0, 0, 0, navInset);
+                ViewGroup.LayoutParams lp = barWrapRef.getLayoutParams();
+                if (lp != null && lp.height != dp(62) + navInset) { lp.height = dp(62) + navInset; barWrapRef.setLayoutParams(lp); }
+            }
             return insets;
         });
         FrameLayout body = new FrameLayout(this);
@@ -921,11 +1188,21 @@ public class MainActivity extends Activity {
         barWrap.setElevation(dp(10));
         navInd = new View(this);
         navInd.setBackground(round(blend(PANEL, ACCENT, 0.24f), 20));
-        barWrap.addView(navInd, new FrameLayout.LayoutParams(dp(68), dp(40), Gravity.LEFT | Gravity.CENTER_VERTICAL));
-        barWrap.addView(bar, new FrameLayout.LayoutParams(-1, -1));
+        navInd.setBackground(new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, new int[]{blend(PANEL, ACCENT, 0.28f), blend(PANEL, ACCENT2, 0.28f)}));
+        ((GradientDrawable) navInd.getBackground()).setCornerRadius(dp(20));
+        FrameLayout barInner = new FrameLayout(this);
+        barInner.addView(navInd, new FrameLayout.LayoutParams(dp(68), dp(40), Gravity.LEFT | Gravity.CENTER_VERTICAL));
+        barInner.addView(bar, new FrameLayout.LayoutParams(-1, -1));
+        barWrap.addView(barInner, new FrameLayout.LayoutParams(-1, dp(62), Gravity.TOP));
+        barWrapRef = barWrap;
         shell.addView(barWrap, new LinearLayout.LayoutParams(-1, dp(62)));
         appRoot = new FrameLayout(this);
         appRoot.setBackgroundColor(BG);
+        aurora = new Aurora(this, ACCENT, ACCENT2, darkTheme);
+        aurora.setScaleX(1.25f);
+        aurora.setScaleY(1.1f);
+        aurora.setVisibility(hasBg() ? View.GONE : View.VISIBLE);
+        appRoot.addView(aurora, new FrameLayout.LayoutParams(-1, -1));
         bgView = new ImageView(this);
         bgView.setScaleType(ImageView.ScaleType.CENTER_CROP);
         appRoot.addView(bgView, new FrameLayout.LayoutParams(-1, -1));
@@ -943,7 +1220,7 @@ public class MainActivity extends Activity {
 
     private void moveNavInd(boolean anim) {
         if (navInd == null) return;
-        final View wrap = (View) navInd.getParent();
+        final View wrap = (View) navInd.getParent();   // barInner
         int w = wrap.getWidth();
         if (w == 0) { wrap.post(() -> moveNavInd(false)); return; }
         int pos = wrap.getLayoutDirection() == View.LAYOUT_DIRECTION_RTL ? 3 - curTab : curTab;
@@ -1017,6 +1294,11 @@ public class MainActivity extends Activity {
             }
         }
         moveNavInd(changed && !first);
+        if (aurora != null) {
+            float ax = (1.5f - tab) * dp(22);
+            if (changed && !first) aurora.animate().translationX(ax).setDuration(700).setInterpolator(new DecelerateInterpolator(1.6f)).start();
+            else aurora.setTranslationX(ax);
+        }
         if (changed && !first) buzz(appRoot, HapticFeedbackConstants.KEYBOARD_TAP);
         if (tab == 0) renderFeed(); else if (tab == 1) renderAlbums(); else if (tab == 2) renderUpload(); else renderSettings();
     }
@@ -1089,39 +1371,48 @@ public class MainActivity extends Activity {
     private FrameLayout makeThumb(Library.Item it) {
         boolean vid = Library.isVideo(it.name), pdf = Library.isPdf(it.name);
         FrameLayout fl = new FrameLayout(this);
-        fl.setBackground(round(FIELD, 10));
+        fl.setBackground(round(FIELD, 16));
         ImageView iv = new ImageView(this);
         iv.setScaleType(ImageView.ScaleType.CENTER_CROP);
         iv.setOutlineProvider(new ViewOutlineProvider() {
-            @Override public void getOutline(View v, Outline o) { o.setRoundRect(0, 0, v.getWidth(), v.getHeight(), dp(10)); }
+            @Override public void getOutline(View v, Outline o) { o.setRoundRect(0, 0, v.getWidth(), v.getHeight(), dp(16)); }
         });
         iv.setClipToOutline(true);
         fl.addView(iv, new FrameLayout.LayoutParams(-1, -1));
         TextView label = (vid || pdf) ? new TextView(this) : null;
+        if (vid || pdf) {   // мягкое затемнение снизу под подписью
+            View scrim = new View(this);
+            GradientDrawable sg = new GradientDrawable(GradientDrawable.Orientation.BOTTOM_TOP, new int[]{0x73000000, 0x00000000});
+            sg.setCornerRadii(new float[]{0, 0, 0, 0, dp(16), dp(16), dp(16), dp(16)});
+            scrim.setBackground(sg);
+            fl.addView(scrim, new FrameLayout.LayoutParams(-1, dp(44), Gravity.BOTTOM));
+        }
         if (vid) {
-            TextView play = tv("▶", 15, 0xFFFFFFFF, false);
+            TextView play = tv("▶", 16, 0xFFFFFFFF, false);
             play.setGravity(Gravity.CENTER);
             GradientDrawable g = new GradientDrawable();
             g.setShape(GradientDrawable.OVAL);
-            g.setColor(0x99000000);
+            g.setColor(0x66000000);
+            g.setStroke(dp(1), 0x66FFFFFF);
             play.setBackground(g);
-            fl.addView(play, new FrameLayout.LayoutParams(dp(32), dp(32), Gravity.CENTER));
+            fl.addView(play, new FrameLayout.LayoutParams(dp(36), dp(36), Gravity.CENTER));
         }
         if (label != null) {
             label.setTextColor(0xFFFFFFFF);
             label.setTextSize(10);
-            label.setPadding(dp(4), dp(1), dp(4), dp(1));
-            label.setBackground(round(0x99000000, 4));
+            label.setTypeface(boldFace());
+            label.setPadding(dp(6), dp(2), dp(6), dp(2));
+            label.setBackground(round(0x66000000, 8));
             if (pdf) label.setText("PDF"); else label.setVisibility(View.GONE);
             FrameLayout.LayoutParams dlp = new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.END);
             dlp.setMargins(0, 0, dp(4), dp(4));
             fl.addView(label, dlp);
         }
         if (it.enc) {
-            TextView lk = tv("🔒", 9, 0xFFFFFFFF, false);
-            lk.setPadding(dp(4), dp(1), dp(4), dp(1));
-            lk.setBackground(round(0x99000000, 4));
-            FrameLayout.LayoutParams lkp = new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.START);
+            TextView lk = tv("🔒", 10, 0xFFFFFFFF, false);
+            lk.setGravity(Gravity.CENTER);
+            lk.setBackground(round(0x80000000, 10));
+            FrameLayout.LayoutParams lkp = new FrameLayout.LayoutParams(dp(20), dp(20), Gravity.BOTTOM | Gravity.START);
             lkp.setMargins(dp(4), 0, 0, dp(4));
             fl.addView(lk, lkp);
         }
@@ -1636,13 +1927,20 @@ public class MainActivity extends Activity {
         FrameLayout th = makeThumb(it);
         if (selection != null && selection.contains(it.id)) {
             View tint = new View(this);
-            tint.setBackground(round((ACCENT & 0x00FFFFFF) | 0x77000000, 10));
+            GradientDrawable tg = new GradientDrawable();
+            tg.setCornerRadius(dp(16));
+            tg.setColor((ACCENT & 0x00FFFFFF) | 0x38000000);
+            tg.setStroke(dp(3), ACCENT);
+            tint.setBackground(tg);
             th.addView(tint, new FrameLayout.LayoutParams(-1, -1));
+            th.setScaleX(0.93f);
+            th.setScaleY(0.93f);
             TextView ck = tv("✓", 14, ONACC, true);
             ck.setGravity(Gravity.CENTER);
             GradientDrawable og = new GradientDrawable();
             og.setShape(GradientDrawable.OVAL);
             og.setColor(ACCENT);
+            og.setStroke(dp(2), 0xFFFFFFFF);
             ck.setBackground(og);
             FrameLayout.LayoutParams ckp = new FrameLayout.LayoutParams(dp(26), dp(26), Gravity.TOP | Gravity.START);
             ckp.setMargins(dp(6), dp(6), 0, 0);
@@ -1763,7 +2061,7 @@ public class MainActivity extends Activity {
         e.setLineSpacing(dp(4), 1f);
         e.setGravity(Gravity.CENTER);
         e.setPadding(dp(16), dp(32), dp(16), dp(32));
-        e.setBackground(round(PANEL, 14));
+        e.setBackground(panel(14));
         return e;
     }
 
@@ -1780,7 +2078,7 @@ public class MainActivity extends Activity {
         LinearLayout head = new LinearLayout(this);
         head.setGravity(Gravity.CENTER_VERTICAL);
         head.setPadding(dp(16), dp(12), dp(12), dp(4));
-        head.addView(tv(t("tab_feed").toUpperCase(Locale.ROOT), 21, FG, true), new LinearLayout.LayoutParams(0, -2, 1));
+        head.addView(headline(t("tab_feed"), 30), new LinearLayout.LayoutParams(0, -2, 1));
         filterBtn = tv(t("filter"), 14, ONACC, true);
         filterBtn.setGravity(Gravity.CENTER);
         filterBtn.setPadding(dp(18), 0, dp(18), 0);
@@ -1808,7 +2106,7 @@ public class MainActivity extends Activity {
         fsFav.setOnClickListener(v -> toggleFav(selectedFeed()));
         TextView fsAlbum = tv("▣", 18, ONACC, true);
         fsAlbum.setGravity(Gravity.CENTER);
-        fsAlbum.setBackground(round(ACCENT, 20));
+        fsAlbum.setBackground(accentBg(20));
         fsAlbum.setOnClickListener(v -> chooseAlbum(selectedFeed()));
         TextView fsDel = tv("🗑", 18, 0xFFFFFFFF, true);
         fsDel.setGravity(Gravity.CENTER);
@@ -1827,7 +2125,7 @@ public class MainActivity extends Activity {
         contBar = new LinearLayout(this);
         contBar.setGravity(Gravity.CENTER_VERTICAL);
         contBar.setPadding(dp(14), dp(10), dp(14), dp(10));
-        contBar.setBackground(round(PANEL, 18));
+        contBar.setBackground(panel(18));
         LinearLayout.LayoutParams cbp = new LinearLayout.LayoutParams(-1, -2);
         cbp.setMargins(dp(12), dp(2), dp(12), dp(6));
         contBar.setVisibility(View.GONE);
@@ -2005,7 +2303,8 @@ public class MainActivity extends Activity {
         int active = incTags.size() + excTags.size() + (sortMode == 0 ? 0 : 1) + (favOnly ? 1 : 0);
         filterBtn.setText(active > 0 ? t("filter") + " · " + active : t("filter"));
         filterBtn.setTextColor(active > 0 ? ONACC : FG);
-        filterBtn.setBackground(round(active > 0 ? ACCENT : BTN, 20));
+        filterBtn.setBackground(active > 0 ? accentBg(20) : round(BTN, 20));
+        startIcon(filterBtn, R.drawable.ic_tune, active > 0 ? ONACC : FG);
         final ArrayList<Library.Item> list = filtered();
         renderTypeRow();
         renderContinue(list);
@@ -2025,7 +2324,7 @@ public class MainActivity extends Activity {
             feedGrid.addView(en, params(-1, -2));
             if (lib.active().isEmpty()) {
                 TextView add = primaryButton("＋  " + t("tab_upload"));
-                add.setBackground(round(ACCENT, 24));
+                add.setBackground(accentBg(24));
                 add.setOnClickListener(v -> showTab(2));
                 LinearLayout.LayoutParams ap0 = params(-1, 50);
                 ap0.topMargin = dp(12);
@@ -2042,7 +2341,7 @@ public class MainActivity extends Activity {
         LinearLayout c = new LinearLayout(this);
         c.setOrientation(LinearLayout.VERTICAL);
         c.setPadding(dp(14), dp(12), dp(14), dp(14));
-        c.setBackground(round(PANEL, 20));
+        c.setBackground(panel(20));
         return c;
     }
 
@@ -2129,7 +2428,7 @@ public class MainActivity extends Activity {
         final TextView clear = button(t("clear_sel"));
         clear.setBackground(round(BTN, 24));
         TextView applyB = primaryButton(t("apply"));
-        applyB.setBackground(round(ACCENT, 24));
+        applyB.setBackground(accentBg(24));
         foot.addView(clear, new LinearLayout.LayoutParams(0, dp(48), 1));
         LinearLayout.LayoutParams ap = new LinearLayout.LayoutParams(0, dp(48), 1);
         ap.setMarginStart(dp(10));
@@ -2238,7 +2537,7 @@ public class MainActivity extends Activity {
         albumBackBtn.setGravity(Gravity.CENTER);
         albumBackBtn.setOnClickListener(v -> { albumOpen = null; animGrid = true; renderAlbums(); });
         albumHead.addView(albumBackBtn, new LinearLayout.LayoutParams(dp(44), dp(44)));
-        albumTitle = tv("", 21, FG, true);
+        albumTitle = headline("", 26);
         albumTitle.setSingleLine(true);
         albumTitle.setEllipsize(TextUtils.TruncateAt.END);
         albumTitle.setPadding(dp(8), 0, dp(8), 0);
@@ -2254,7 +2553,7 @@ public class MainActivity extends Activity {
         albumNewBtn = tv("+ " + t("new_album"), 14, ONACC, true);
         albumNewBtn.setGravity(Gravity.CENTER);
         albumNewBtn.setPadding(dp(16), 0, dp(16), 0);
-        albumNewBtn.setBackground(round(ACCENT, 20));
+        albumNewBtn.setBackground(accentBg(20));
         albumNewBtn.setOnClickListener(v -> promptText(t("new_album"), "", t("album_name"), name -> {
             if (!name.isEmpty()) { lib.createAlbum(name); lib.save(); renderAlbums(); }
         }));
@@ -2398,6 +2697,7 @@ public class MainActivity extends Activity {
             boolean isFav = Library.FAV.equals(albumOpen);
             Library.Album a = isFav ? null : lib.albumById(albumOpen);
             albumTitle.setText(isFav ? "♥ " + t("favorites") : a.name);
+            albumTitle.setTextSize(24);
             albumRenameBtn.setVisibility(isFav ? View.GONE : View.VISIBLE);
             albumDelBtn.setVisibility(isFav ? View.GONE : View.VISIBLE);
             ArrayList<Library.Item> list = lib.inAlbum(albumOpen);
@@ -2407,7 +2707,8 @@ public class MainActivity extends Activity {
             fxTree(albumGrid);
             return;
         }
-        albumTitle.setText(t("tab_albums").toUpperCase(Locale.ROOT));
+        albumTitle.setText(t("tab_albums"));
+        albumTitle.setTextSize(30);
         albumListBox.removeAllViews();
         addFavCard();
         if (lib.albums.isEmpty()) { albumListBox.addView(emptyNote(t("no_albums")), params(-1, -2)); fxTree(albumListBox); return; }
@@ -2417,7 +2718,7 @@ public class MainActivity extends Activity {
             LinearLayout card = new LinearLayout(this);
             card.setGravity(Gravity.CENTER_VERTICAL);
             card.setPadding(dp(10), dp(9), dp(12), dp(9));
-            card.setBackground(round(picked ? blend(PANEL, ACCENT, 0.3f) : PANEL, 14));
+            card.setBackground(picked ? round(blend(PANEL, ACCENT, 0.3f), 20) : panel(20));
             LinearLayout.LayoutParams cp = params(-1, -2);
             cp.bottomMargin = dp(8);
             albumListBox.addView(card, cp);
@@ -2428,7 +2729,7 @@ public class MainActivity extends Activity {
                 ph.setBackground(round(FIELD, 10));
                 cover = ph;
             } else cover = makeThumb(its.get(0));
-            card.addView(cover, new LinearLayout.LayoutParams(dp(76), dp(76)));
+            card.addView(stack(cover, ACCENT), new LinearLayout.LayoutParams(dp(86), dp(84)));
             LinearLayout info = new LinearLayout(this);
             info.setOrientation(LinearLayout.VERTICAL);
             info.setPadding(dp(12), 0, dp(4), 0);
@@ -2452,12 +2753,30 @@ public class MainActivity extends Activity {
         fxTree(albumListBox);
     }
 
+    // Обложка «стопкой»: за фото выглядывают ещё две карточки
+    private View stack(View cover, int tint) {
+        FrameLayout f = new FrameLayout(this);
+        View b1 = new View(this);
+        b1.setBackground(round(blend(FIELD, tint, 0.35f), 14));
+        b1.setRotation(-8f);
+        f.addView(b1, new FrameLayout.LayoutParams(dp(64), dp(64), Gravity.CENTER));
+        View b2 = new View(this);
+        b2.setBackground(round(blend(FIELD, tint, 0.18f), 14));
+        b2.setRotation(6f);
+        f.addView(b2, new FrameLayout.LayoutParams(dp(66), dp(66), Gravity.CENTER));
+        cover.setElevation(dp(3));
+        f.addView(cover, new FrameLayout.LayoutParams(dp(70), dp(70), Gravity.CENTER));
+        return f;
+    }
+
     private void addFavCard() {
         ArrayList<Library.Item> favs = lib.inAlbum(Library.FAV);
         LinearLayout card = new LinearLayout(this);
         card.setGravity(Gravity.CENTER_VERTICAL);
         card.setPadding(dp(10), dp(9), dp(12), dp(9));
-        card.setBackground(round(blend(PANEL, 0xFFE8527E, 0.16f), 14));
+        GradientDrawable fbg = new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, new int[]{blend(PANEL, 0xFFE8527E, 0.3f), blend(PANEL, 0xFFE8527E, 0.08f)});
+        fbg.setCornerRadius(dp(20));
+        card.setBackground(fbg);
         LinearLayout.LayoutParams cp = params(-1, -2);
         cp.bottomMargin = dp(8);
         albumListBox.addView(card, cp);
@@ -2468,7 +2787,7 @@ public class MainActivity extends Activity {
             ph.setBackground(round(FIELD, 10));
             cover = ph;
         } else cover = makeThumb(favs.get(0));
-        card.addView(cover, new LinearLayout.LayoutParams(dp(76), dp(76)));
+        card.addView(stack(cover, 0xFFE8527E), new LinearLayout.LayoutParams(dp(86), dp(84)));
         LinearLayout info = new LinearLayout(this);
         info.setOrientation(LinearLayout.VERTICAL);
         info.setPadding(dp(12), 0, dp(4), 0);
@@ -2536,7 +2855,7 @@ public class MainActivity extends Activity {
         ttl.setPadding(dp(8), 0, dp(8), 0);
         head.addView(ttl, new LinearLayout.LayoutParams(0, -2, 1));
         TextView save = primaryButton(t("save"));
-        save.setBackground(round(ACCENT, 20));
+        save.setBackground(accentBg(20));
         save.setPadding(dp(18), 0, dp(18), 0);
         head.addView(save, new LinearLayout.LayoutParams(-2, dp(40)));
         root.addView(head, new LinearLayout.LayoutParams(-1, -2));
@@ -2559,7 +2878,7 @@ public class MainActivity extends Activity {
                 final LinearLayout row = new LinearLayout(this);
                 row.setGravity(Gravity.CENTER_VERTICAL);
                 row.setPadding(dp(8), dp(8), dp(4), dp(8));
-                row.setBackground(round(PANEL, 14));
+                row.setBackground(panel(14));
                 row.addView(makeThumb(it), new LinearLayout.LayoutParams(dp(56), dp(56)));
                 TextView nm = tv((i + 1) + ".  " + it.name, 14, FG, true);
                 nm.setSingleLine(true);
@@ -2657,9 +2976,10 @@ public class MainActivity extends Activity {
         upHeader = new LinearLayout(this);
         upHeader.setGravity(Gravity.CENTER_VERTICAL);
         upHeader.setPadding(dp(16), dp(12), dp(12), dp(4));
-        upHeader.addView(tv(t("tab_upload").toUpperCase(Locale.ROOT), 21, FG, true), new LinearLayout.LayoutParams(0, -2, 1));
+        upHeader.addView(headline(t("tab_upload"), 30), new LinearLayout.LayoutParams(0, -2, 1));
         trashBtn = button(t("trash"));
         trashBtn.setPadding(dp(14), 0, dp(14), 0);
+        startIcon(trashBtn, R.drawable.ic_delete, FG);
         trashBtn.setOnClickListener(v -> openTrash());
         upHeader.addView(trashBtn, new LinearLayout.LayoutParams(-2, dp(40)));
         r.addView(upHeader, new LinearLayout.LayoutParams(-1, -2));
@@ -2697,18 +3017,62 @@ public class MainActivity extends Activity {
         r.addView(selActions, new LinearLayout.LayoutParams(-1, -2));
 
         upButtons = new LinearLayout(this);
-        upButtons.setPadding(dp(16), dp(6), dp(16), dp(6));
-        TextView add = primaryButton(t("add_files")), zip = button(t("add_zip")), manga = button(t("add_manga"));
-        add.setOnClickListener(v -> pickMedia());
-        zip.setOnClickListener(v -> pickZip());
-        manga.setOnClickListener(v -> pickPdf());
-        upButtons.addView(add, new LinearLayout.LayoutParams(0, dp(46), 1));
-        LinearLayout.LayoutParams z2 = new LinearLayout.LayoutParams(0, dp(46), 1);
-        z2.setMarginStart(dp(8));
-        upButtons.addView(zip, z2);
-        LinearLayout.LayoutParams z3 = new LinearLayout.LayoutParams(0, dp(46), 1);
-        z3.setMarginStart(dp(8));
-        upButtons.addView(manga, z3);
+        upButtons.setOrientation(LinearLayout.VERTICAL);
+        upButtons.setPadding(dp(16), dp(8), dp(16), dp(8));
+        LinearLayout hero = new LinearLayout(this);
+        hero.setGravity(Gravity.CENTER_VERTICAL);
+        hero.setPadding(dp(16), dp(16), dp(16), dp(16));
+        hero.setBackground(accentBg(24));
+        glow(hero, ACCENT, 8);
+        ImageView hic = new ImageView(this);
+        hic.setImageResource(R.drawable.nav_upload);
+        hic.setColorFilter(ONACC);
+        hic.setPadding(dp(12), dp(12), dp(12), dp(12));
+        GradientDrawable hcg = new GradientDrawable();
+        hcg.setShape(GradientDrawable.OVAL);
+        hcg.setColor((ONACC & 0x00FFFFFF) | 0x2E000000);
+        hic.setBackground(hcg);
+        hero.addView(hic, new LinearLayout.LayoutParams(dp(54), dp(54)));
+        LinearLayout htx = new LinearLayout(this);
+        htx.setOrientation(LinearLayout.VERTICAL);
+        htx.setPadding(dp(14), 0, 0, 0);
+        TextView ht = tv(t("hero_add"), 17, ONACC, true);
+        ht.setTypeface(dispFace());
+        htx.addView(ht);
+        TextView hs = tv(t("hero_add_sub"), 12.5f, (ONACC & 0x00FFFFFF) | 0xCC000000, false);
+        hs.setPadding(0, dp(2), 0, 0);
+        htx.addView(hs);
+        hero.addView(htx, new LinearLayout.LayoutParams(0, -2, 1));
+        hero.setOnClickListener(v -> pickMedia());
+        pressFx(hero);
+        upButtons.addView(hero, new LinearLayout.LayoutParams(-1, -2));
+        LinearLayout row2 = new LinearLayout(this);
+        int[] icRes = {R.drawable.ic_archive, R.drawable.ic_book};
+        String[] lbls = {t("add_zip"), t("add_manga")};
+        for (int k = 0; k < 2; k++) {
+            final int kk = k;
+            LinearLayout tile = new LinearLayout(this);
+            tile.setGravity(Gravity.CENTER_VERTICAL);
+            tile.setPadding(dp(14), 0, dp(10), 0);
+            tile.setBackground(panel(18));
+            ImageView ti = new ImageView(this);
+            ti.setImageResource(icRes[k]);
+            ti.setColorFilter(ACCENT);
+            tile.addView(ti, new LinearLayout.LayoutParams(dp(22), dp(22)));
+            TextView tl = tv(lbls[k], 14, FG, true);
+            tl.setSingleLine(true);
+            tl.setEllipsize(TextUtils.TruncateAt.END);
+            tl.setPadding(dp(10), 0, 0, 0);
+            tile.addView(tl, new LinearLayout.LayoutParams(0, -2, 1));
+            tile.setOnClickListener(v -> { if (kk == 0) pickZip(); else pickPdf(); });
+            pressFx(tile);
+            LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(0, dp(54), 1);
+            if (k == 1) tp.setMarginStart(dp(10));
+            row2.addView(tile, tp);
+        }
+        LinearLayout.LayoutParams r2p = new LinearLayout.LayoutParams(-1, -2);
+        r2p.topMargin = dp(10);
+        upButtons.addView(row2, r2p);
         r.addView(upButtons, new LinearLayout.LayoutParams(-1, -2));
 
         LinearLayout labelRow = new LinearLayout(this);
@@ -2789,7 +3153,7 @@ public class MainActivity extends Activity {
             LinearLayout card = new LinearLayout(this);
             card.setGravity(Gravity.CENTER_VERTICAL);
             card.setPadding(dp(10), dp(9), dp(8), dp(9));
-            card.setBackground(round(picked ? blend(PANEL, ACCENT, 0.3f) : PANEL, 14));
+            card.setBackground(picked ? round(blend(PANEL, ACCENT, 0.3f), 20) : panel(20));
             LinearLayout.LayoutParams cp = params(-1, -2);
             cp.bottomMargin = dp(8);
             listBox.addView(card, cp);
@@ -3010,7 +3374,7 @@ public class MainActivity extends Activity {
         close.setGravity(Gravity.CENTER);
         close.setOnClickListener(v -> d.dismiss());
         head.addView(close, new LinearLayout.LayoutParams(dp(44), dp(44)));
-        TextView title = tv(t("trash").toUpperCase(Locale.ROOT), 21, FG, true);
+        TextView title = headline(t("trash"), 24);
         title.setPadding(dp(8), 0, 0, 0);
         head.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
         root.addView(head, new LinearLayout.LayoutParams(-1, -2));
@@ -3042,7 +3406,7 @@ public class MainActivity extends Activity {
                 LinearLayout card = new LinearLayout(this);
                 card.setGravity(Gravity.CENTER_VERTICAL);
                 card.setPadding(dp(10), dp(9), dp(10), dp(9));
-                card.setBackground(round(PANEL, 14));
+                card.setBackground(panel(14));
                 LinearLayout.LayoutParams cp = params(-1, -2);
                 cp.bottomMargin = dp(8);
                 box.addView(card, cp);
@@ -3882,6 +4246,7 @@ public class MainActivity extends Activity {
     private void buildLock() {
         lockView = new FrameLayout(this);
         lockView.setBackgroundColor(BG);
+        lockView.addView(new Aurora(this, ACCENT, ACCENT2, darkTheme), new FrameLayout.LayoutParams(-1, -1));
         lockView.setClickable(true);
         lockView.setVisibility(View.GONE);
         lockView.setOnApplyWindowInsetsListener((v, insets) -> {
@@ -3892,10 +4257,18 @@ public class MainActivity extends Activity {
         col.setOrientation(LinearLayout.VERTICAL);
         col.setGravity(Gravity.CENTER_HORIZONTAL);
         col.setPadding(dp(32), dp(24), dp(32), dp(24));
-        TextView lockIc = tv("🔒", 34, FG, false);
+        TextView lockIc = tv("🔒", 30, ONACC, false);
         lockIc.setGravity(Gravity.CENTER);
-        col.addView(lockIc, new LinearLayout.LayoutParams(-1, -2));
-        TextView title = tv(t("pin_enter"), 20, FG, true);
+        GradientDrawable lig = new GradientDrawable(GradientDrawable.Orientation.TL_BR, new int[]{ACCENT, ACCENT2});
+        lig.setShape(GradientDrawable.OVAL);
+        lockIc.setBackground(lig);
+        glow(lockIc, ACCENT, 12);
+        LinearLayout.LayoutParams lip = new LinearLayout.LayoutParams(dp(84), dp(84));
+        lip.gravity = Gravity.CENTER_HORIZONTAL;
+        lip.bottomMargin = dp(8);
+        col.addView(lockIc, lip);
+        TextView title = tv(t("pin_enter"), 22, FG, true);
+        title.setTypeface(dispFace());
         title.setGravity(Gravity.CENTER);
         title.setPadding(0, dp(8), 0, dp(4));
         col.addView(title, new LinearLayout.LayoutParams(-1, -2));
@@ -3913,7 +4286,8 @@ public class MainActivity extends Activity {
             for (final String k : rowKeys) {
                 TextView key = tv(k, k.equals("⌫") ? 22 : 26, k.equals("✓") ? ONACC : FG, true);
                 key.setGravity(Gravity.CENTER);
-                key.setBackground(round(k.equals("✓") ? ACCENT : k.equals("⌫") ? BTN : PANEL, 36));
+                key.setBackground(k.equals("✓") ? accentBg(36) : k.equals("⌫") ? round(BTN, 36) : panel(36));
+                if (TF_MED != null && !k.equals("✓") && !k.equals("⌫")) key.setTypeface(TF_MED);
                 key.setOnClickListener(v -> pinKey(k));
                 LinearLayout.LayoutParams kp = new LinearLayout.LayoutParams(0, dp(72), 1);
                 kp.setMargins(dp(8), dp(7), dp(8), dp(7));
@@ -4068,7 +4442,7 @@ public class MainActivity extends Activity {
                 card = new LinearLayout(this);
                 card.setOrientation(LinearLayout.VERTICAL);
                 card.setPadding(dp(14), dp(10), dp(14), dp(14));
-                card.setBackground(round(hasBg() ? ((PANEL & 0x00FFFFFF) | 0xE6000000) : PANEL, 22));
+                card.setBackground(hasBg() ? round((PANEL & 0x00FFFFFF) | 0xE6000000, 22) : panel(22));
                 setBox.addView(card, new LinearLayout.LayoutParams(-1, -2));
             } else if ("ver".equals(v.getTag()) || card == null) {
                 setBox.addView(v);
@@ -4081,9 +4455,9 @@ public class MainActivity extends Activity {
     private void renderSettings() {
         if (setBox == null || !visible(tabViews[3])) return;
         setBox.removeAllViews();
-        setBox.addView(tv(t("tab_settings").toUpperCase(Locale.ROOT), 21, FG, true), new LinearLayout.LayoutParams(-1, -2));
+        setBox.addView(headline(t("tab_settings"), 30), new LinearLayout.LayoutParams(-1, -2));
 
-        setBox.addView(sectionLabel(t("set_language")));
+        setBox.addView(sectionLabel("🌐", t("set_language")));
         Flow lf = new Flow(this, dp(8), dp(8));
         for (int i = 0; i < Strings.LANGS.length; i++) {
             final String code = Strings.LANGS[i];
@@ -4093,7 +4467,7 @@ public class MainActivity extends Activity {
         }
         setBox.addView(lf, new LinearLayout.LayoutParams(-1, -2));
 
-        setBox.addView(sectionLabel(t("set_appearance")));
+        setBox.addView(sectionLabel("🎨", t("set_appearance")));
         setBox.addView(tv(t("set_theme"), 15, FG, true));
         Flow themeFlow = new Flow(this, dp(14), dp(10));
         String cur = prefs.getString("theme", "system");
@@ -4268,7 +4642,7 @@ public class MainActivity extends Activity {
             setBox.addView(settingRow(t("bg_dim"), dimSt), new LinearLayout.LayoutParams(-1, -2));
         }
 
-        setBox.addView(sectionLabel(t("set_brand")));
+        setBox.addView(sectionLabel("✨", t("set_brand")));
         TextView nameBtn = button("✎  " + appName());
         nameBtn.setSingleLine(true);
         nameBtn.setEllipsize(TextUtils.TruncateAt.END);
@@ -4318,7 +4692,7 @@ public class MainActivity extends Activity {
         brNote.setPadding(0, dp(8), 0, 0);
         setBox.addView(brNote, new LinearLayout.LayoutParams(-1, -2));
 
-        setBox.addView(sectionLabel(t("set_security")));
+        setBox.addView(sectionLabel("🔐", t("set_security")));
         if (!decoy) {
             setBox.addView(settingRow(t("pin_code"), tv(hasPin() ? t("pin_on") : t("pin_off"), 14, hasPin() ? ACCENT : MUTED, true)), new LinearLayout.LayoutParams(-1, -2));
             LinearLayout pinRow = new LinearLayout(this);
@@ -4369,7 +4743,7 @@ public class MainActivity extends Activity {
         shotsChip.setOnClickListener(v -> { prefs.edit().putBoolean("no_shots", !prefs.getBoolean("no_shots", false)).apply(); applySecure(); renderSettings(); });
         setBox.addView(settingRow(t("no_shots"), shotsChip), new LinearLayout.LayoutParams(-1, -2));
 
-        setBox.addView(sectionLabel(t("set_protect")));
+        setBox.addView(sectionLabel("🛡️", t("set_protect")));
         final TextView encChip = toggleChip(prefs.getBoolean("enc_new", false));
         encChip.setOnClickListener(v -> { prefs.edit().putBoolean("enc_new", !prefs.getBoolean("enc_new", false)).apply(); renderSettings(); });
         setBox.addView(settingRow(t("enc_new"), encChip), new LinearLayout.LayoutParams(-1, -2));
@@ -4387,7 +4761,7 @@ public class MainActivity extends Activity {
         encNote.setPadding(0, dp(8), 0, 0);
         setBox.addView(encNote, new LinearLayout.LayoutParams(-1, -2));
 
-        setBox.addView(sectionLabel(t("set_smart")));
+        setBox.addView(sectionLabel("🧠", t("set_smart")));
         final TextView atChip = toggleChip(prefs.getBoolean("autotag_new", true));
         atChip.setOnClickListener(v -> { prefs.edit().putBoolean("autotag_new", !prefs.getBoolean("autotag_new", true)).apply(); renderSettings(); });
         setBox.addView(settingRow(t("autotag_new"), atChip), new LinearLayout.LayoutParams(-1, -2));
@@ -4417,7 +4791,7 @@ public class MainActivity extends Activity {
         }
         setBox.addView(trFlow, new LinearLayout.LayoutParams(-1, -2));
 
-        setBox.addView(sectionLabel(t("set_library")));
+        setBox.addView(sectionLabel("📚", t("set_library")));
         TextView statsB = button(t("stats_btn"));
         statsB.setOnClickListener(v -> openStats());
         setBox.addView(statsB, params(-1, 48));
@@ -4432,7 +4806,7 @@ public class MainActivity extends Activity {
         ibp.topMargin = dp(8);
         setBox.addView(intB, ibp);
 
-        setBox.addView(sectionLabel(t("set_data")));
+        setBox.addView(sectionLabel("💾", t("set_data")));
         TextView exp = button(t("export_all"));
         exp.setOnClickListener(v -> startExport());
         setBox.addView(exp, params(-1, 48));
@@ -4459,7 +4833,7 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams rsp = params(-1, 48);
         rsp.topMargin = dp(10);
         setBox.addView(rs, rsp);
-        TextView ver = tv("Offline Media Vault · v2.0", 11, MUTED, false);
+        TextView ver = tv("Offline Media Vault · v2.1", 11, MUTED, false);
         ver.setGravity(Gravity.CENTER);
         ver.setPadding(0, dp(18), 0, 0);
         ver.setTag("ver");
