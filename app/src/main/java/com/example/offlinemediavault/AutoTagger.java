@@ -27,7 +27,7 @@ final class AutoTagger {
 
     AutoTagger(String lang) {
         this.lang = lang;
-        labeler = ImageLabeling.getClient(new ImageLabelerOptions.Builder().setConfidenceThreshold(0.6f).build());
+        labeler = ImageLabeling.getClient(new ImageLabelerOptions.Builder().setConfidenceThreshold(0.03f).build());
         faces = FaceDetection.getClient(new FaceDetectorOptions.Builder()
                 .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST).setMinFaceSize(0.08f).build());
     }
@@ -51,26 +51,53 @@ final class AutoTagger {
         }
     }
 
-    List<String> analyze(Bitmap bmp) {
+    static final class Result {
+        final List<String> tags = new ArrayList<>();
+        final java.util.HashMap<Integer, Float> vec = new java.util.HashMap<>();
+    }
+
+    private void labelPass(Bitmap bmp, java.util.HashMap<Integer, Float> conf, java.util.HashMap<Integer, String> names) throws Exception {
+        List<ImageLabel> ls = Tasks.await(labeler.process(InputImage.fromBitmap(bmp, 0)));
+        for (ImageLabel l : ls) {
+            Float old = conf.get(l.getIndex());
+            if (old == null || old < l.getConfidence()) conf.put(l.getIndex(), l.getConfidence());
+            names.put(l.getIndex(), l.getText());
+        }
+    }
+
+    /** Полный кадр + центральный фрагмент (видит более мелкие объекты), метки объединяются по максимуму. */
+    Result analyze(Bitmap bmp) {
+        Result res = new Result();
+        if (bmp == null) return res;
         LinkedHashSet<String> out = new LinkedHashSet<>();
-        if (bmp == null) return new ArrayList<>();
         try {
-            InputImage img = InputImage.fromBitmap(bmp, 0);
             int nFaces = 0;
             try {
-                List<Face> fl = Tasks.await(faces.process(img));
+                List<Face> fl = Tasks.await(faces.process(InputImage.fromBitmap(bmp, 0)));
                 nFaces = fl.size();
             } catch (Throwable ignore) { }
             if (nFaces == 1) out.add("ru".equals(lang) ? "портрет" : "portrait");
             else if (nFaces == 2) out.add("ru".equals(lang) ? "пара" : "couple");
             else if (nFaces >= 3) out.add("ru".equals(lang) ? "группа" : "group");
             if (nFaces > 0) out.add("ru".equals(lang) ? "люди" : "people");
-            List<ImageLabel> ls = Tasks.await(labeler.process(img));
+            java.util.HashMap<Integer, Float> conf = new java.util.HashMap<>();
+            java.util.HashMap<Integer, String> names = new java.util.HashMap<>();
+            labelPass(bmp, conf, names);
+            int w = bmp.getWidth(), h = bmp.getHeight();
+            if (w >= 240 && h >= 240) {
+                try {
+                    Bitmap crop = Bitmap.createBitmap(bmp, (int) (w * 0.2f), (int) (h * 0.2f), (int) (w * 0.6f), (int) (h * 0.6f));
+                    labelPass(crop, conf, names);
+                } catch (Throwable ignore) { }
+            }
+            ArrayList<java.util.Map.Entry<Integer, Float>> sorted = new ArrayList<>(conf.entrySet());
+            java.util.Collections.sort(sorted, (x, y) -> Float.compare(y.getValue(), x.getValue()));
             int n = 0;
-            for (ImageLabel l : ls) {
-                String en = l.getText();
+            for (java.util.Map.Entry<Integer, Float> e : sorted) {
+                if (e.getValue() >= 0.03f) res.vec.put(e.getKey(), e.getValue());
+                String en = names.get(e.getKey());
+                if (en == null || e.getValue() < 0.55f || n >= 7) continue;
                 if (Labels.SKIP.contains(en.toLowerCase(java.util.Locale.ROOT))) continue;
-                if (n >= 6) break;
                 out.add(Labels.tr(en, lang));
                 String c = Labels.category(en, lang);
                 if (c != null) out.add(c);
@@ -78,6 +105,7 @@ final class AutoTagger {
             }
         } catch (Throwable ignore) {
         }
-        return new ArrayList<>(out);
+        res.tags.addAll(out);
+        return res;
     }
 }

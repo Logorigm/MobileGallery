@@ -2,6 +2,7 @@ package com.example.offlinemediavault;
 
 import android.animation.LayoutTransition;
 import android.app.Activity;
+import android.app.ActivityManager;
 import android.app.AlertDialog;
 import android.app.Dialog;
 import android.content.ComponentName;
@@ -9,6 +10,8 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.content.pm.ShortcutInfo;
+import android.content.pm.ShortcutManager;
 import android.content.res.Configuration;
 import android.database.Cursor;
 import android.graphics.Bitmap;
@@ -22,12 +25,14 @@ import android.graphics.Rect;
 import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.Icon;
 import android.graphics.drawable.InsetDrawable;
 import android.graphics.pdf.PdfRenderer;
 import android.media.MediaMetadataRetriever;
 import android.media.MediaPlayer;
 import android.media.PlaybackParams;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.StatFs;
 import android.os.Handler;
@@ -198,7 +203,7 @@ public class MainActivity extends Activity {
     private static long leftAt = 0;
     private boolean skipLock = false;
 
-    private static final int PICK_MEDIA = 101, PICK_ZIP = 102, PICK_PDF = 103, EXPORT_ZIP = 104, PICK_BG = 105;
+    private static final int PICK_MEDIA = 101, PICK_ZIP = 102, PICK_PDF = 103, EXPORT_ZIP = 104, PICK_BG = 105, PICK_ICON = 106;
 
     private final ArrayList<Dialog> openDialogs = new ArrayList<>();
     private final ExecutorService pool = Executors.newFixedThreadPool(3);
@@ -212,7 +217,7 @@ public class MainActivity extends Activity {
     private FrameLayout appRoot;
     private LinearLayout shell;
     private final View[] tabViews = new View[4];
-    private final TextView[] tabBtns = new TextView[4];
+    private final ImageView[] tabBtns = new ImageView[4];
     private int curTab = 0;
     private int startTab = -1;
 
@@ -226,7 +231,9 @@ public class MainActivity extends Activity {
     private View bgDim;
     private FrameLayout lockView;
     private final LinkedHashSet<String> incTags = new LinkedHashSet<>(), excTags = new LinkedHashSet<>();
-    private boolean matchAll = true, newestFirst = true;
+    private boolean matchAll = true;
+    private int sortMode = 0, typeFilter = 0;
+    private long shuffleSeed = 1;
 
     // ---------- Жизненный цикл ----------
     @Override protected void attachBaseContext(Context base) {
@@ -250,6 +257,7 @@ public class MainActivity extends Activity {
         lib = openLib();
         applySecure();
         purgeTrash();
+        cleanDecSync();
         IconPlan.applyAuto(this);
         IconPlan.schedule(this);
         if (b != null) {
@@ -262,6 +270,7 @@ public class MainActivity extends Activity {
             else if ("com.example.offlinemediavault.FAVORITES".equals(act0)) { startTab = 1; albumOpen = Library.FAV; }
         }
         buildAll();
+        applyTaskDesc();
         if (hasPin() && !authed) showLock();
         else if (pendingPick) { pendingPick = false; ui.post(this::pickMedia); }
     }
@@ -338,6 +347,7 @@ public class MainActivity extends Activity {
 
     @Override protected void onDestroy() {
         super.onDestroy();
+        if (isFinishing()) cleanDecSync();
         for (Dialog d : new ArrayList<>(openDialogs)) { try { if (d.isShowing()) d.dismiss(); } catch (Exception ignored) { } }
     }
 
@@ -763,15 +773,20 @@ public class MainActivity extends Activity {
         String[] names = {t("tab_feed"), t("tab_albums"), t("tab_upload"), t("tab_settings")};
         for (int i = 0; i < 4; i++) {
             final int k = i;
-            TextView b = tv(names[i], 13, MUTED, true);
-            b.setGravity(Gravity.CENTER);
-            b.setSingleLine(true);
-            b.setOnClickListener(v -> showTab(k));
+            FrameLayout cellT = new FrameLayout(this);
+            ImageView b = new ImageView(this);
+            b.setImageResource(NAV_ICONS[i]);
+            b.setScaleType(ImageView.ScaleType.FIT_CENTER);
+            b.setPadding(dp(18), dp(7), dp(18), dp(7));
+            b.setContentDescription(names[i]);
+            cellT.setOnClickListener(v -> showTab(k));
             pressFx(b);
+            b.setClickable(false);
             tabBtns[i] = b;
-            bar.addView(b, new LinearLayout.LayoutParams(0, -1, 1));
+            cellT.addView(b, new FrameLayout.LayoutParams(dp(68), dp(40), Gravity.CENTER));
+            bar.addView(cellT, new LinearLayout.LayoutParams(0, -1, 1));
         }
-        shell.addView(bar, new LinearLayout.LayoutParams(-1, dp(54)));
+        shell.addView(bar, new LinearLayout.LayoutParams(-1, dp(58)));
         appRoot = new FrameLayout(this);
         appRoot.setBackgroundColor(BG);
         bgView = new ImageView(this);
@@ -786,6 +801,8 @@ public class MainActivity extends Activity {
         setContentView(appRoot);
         showTab(startTab >= 0 && startTab < 4 ? startTab : (lib.active().isEmpty() ? 2 : 0));
     }
+
+    private static final int[] NAV_ICONS = {R.drawable.nav_home, R.drawable.nav_gallery, R.drawable.nav_upload, R.drawable.nav_settings};
 
     private void showTab(int tab) { showTab(tab, 0); }
 
@@ -824,7 +841,8 @@ public class MainActivity extends Activity {
             tabViews[i].setTranslationY(0f);
             tabViews[i].setTranslationX(0f);
             boolean on = i == tab;
-            tabBtns[i].setTextColor(on ? ACCENT : MUTED);
+            tabBtns[i].setColorFilter(on ? ACCENT : MUTED);
+            tabBtns[i].setBackground(on ? round(blend(PANEL, ACCENT, 0.2f), 20) : null);
             tabBtns[i].animate().scaleX(on ? 1.08f : 1f).scaleY(on ? 1.08f : 1f).setDuration(200).start();
         }
         if (changed && !first) {
@@ -937,6 +955,14 @@ public class MainActivity extends Activity {
             dlp.setMargins(0, 0, dp(4), dp(4));
             fl.addView(label, dlp);
         }
+        if (it.enc) {
+            TextView lk = tv("🔒", 9, 0xFFFFFFFF, false);
+            lk.setPadding(dp(4), dp(1), dp(4), dp(1));
+            lk.setBackground(round(0x99000000, 4));
+            FrameLayout.LayoutParams lkp = new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.START);
+            lkp.setMargins(dp(4), 0, 0, dp(4));
+            fl.addView(lk, lkp);
+        }
         loadThumb(it, iv, label);
         return fl;
     }
@@ -959,13 +985,50 @@ public class MainActivity extends Activity {
         else if (th.dur > 0) { label.setText(fmtDur(th.dur)); label.setVisibility(View.VISIBLE); }
     }
 
+    private File thumbFile(Library.Item it) {
+        File d = new File(getFilesDir(), "thumbs");
+        d.mkdirs();
+        return new File(d, it.id + ".t");
+    }
+
+    private void saveEncThumb(Library.Item it, Thumb th) {
+        if (th == null || th.bmp == null) return;
+        try {
+            ByteArrayOutputStream bo = new ByteArrayOutputStream();
+            th.bmp.compress(Bitmap.CompressFormat.JPEG, 85, bo);
+            try (OutputStream os = new FileOutputStream(thumbFile(it))) {
+                Crypto.encrypt(this, new java.io.ByteArrayInputStream(bo.toByteArray()), os);
+            }
+        } catch (Throwable ignored) { }
+    }
+
+    private Thumb makeEncThumb(Library.Item it) {
+        Thumb th = new Thumb();
+        try {
+            File tf = thumbFile(it);
+            if (tf.exists()) {
+                ByteArrayOutputStream bo = new ByteArrayOutputStream();
+                Crypto.decrypt(this, tf, bo);
+                th.bmp = BitmapFactory.decodeByteArray(bo.toByteArray(), 0, bo.size());
+                if (th.bmp != null) return th;
+            }
+            File pf = plainFile(it);
+            if (pf != null) { th = thumbFromFile(it, pf); saveEncThumb(it, th); }
+        } catch (Throwable ignored) { }
+        return th;
+    }
+
     private Thumb makeThumbData(Library.Item it) {
+        return it.enc ? makeEncThumb(it) : thumbFromFile(it, new File(it.path));
+    }
+
+    private Thumb thumbFromFile(Library.Item it, File pf) {
         Thumb th = new Thumb();
         try {
             if (Library.isVideo(it.name)) {
                 MediaMetadataRetriever r = new MediaMetadataRetriever();
                 try {
-                    r.setDataSource(it.path);
+                    r.setDataSource(pf.getAbsolutePath());
                     String d = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);
                     if (d != null) th.dur = Long.parseLong(d);
                     Bitmap f = r.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC);
@@ -976,7 +1039,7 @@ public class MainActivity extends Activity {
                 ParcelFileDescriptor pfd = null;
                 PdfRenderer r = null;
                 try {
-                    pfd = ParcelFileDescriptor.open(new File(it.path), ParcelFileDescriptor.MODE_READ_ONLY);
+                    pfd = ParcelFileDescriptor.open(pf, ParcelFileDescriptor.MODE_READ_ONLY);
                     r = new PdfRenderer(pfd);
                     th.pages = r.getPageCount();
                     PdfRenderer.Page p = r.openPage(0);
@@ -991,7 +1054,7 @@ public class MainActivity extends Activity {
                     try { if (r != null) r.close(); } catch (Exception ignored) { }
                     try { if (pfd != null) pfd.close(); } catch (Exception ignored) { }
                 }
-            } else th.bmp = decodeSampled(it.path, 640);
+            } else th.bmp = decodeSampled(pf.getAbsolutePath(), 640);
         } catch (Throwable ignored) { }
         return th;
     }
@@ -1024,7 +1087,7 @@ public class MainActivity extends Activity {
     }
 
     // ---------- Сетка (лента и альбомы) ----------
-    private int tagBodyH(int lines) { return lines * dp(22) + (lines - 1) * dp(4); }
+    private int tagBodyH(int lines) { return lines <= 0 ? 0 : lines * dp(22) + (lines - 1) * dp(4); }
 
     // Нажатие-пружинка + свайп вправо по плитке открывает быстрые теги
     private void cellTouch(final View cell, final Library.Item it, final boolean allowSwipe) {
@@ -1159,35 +1222,229 @@ public class MainActivity extends Activity {
     }
 
     // ---------- Автотеги (ML Kit) ----------
-    /** Блокирующий вызов: только из фонового потока. */
-    private int autoTagList(List<Library.Item> list, boolean progress) {
-        AutoTagger tg = new AutoTagger(lang);
+    private Personal personal;
+
+    private Personal personal() {
+        if (personal == null) personal = new Personal(getFilesDir());
+        return personal;
+    }
+
+    private File decDir() {
+        File d = new File(getCacheDir(), "dec");
+        d.mkdirs();
+        return d;
+    }
+
+    private File plainCached(Library.Item it) {
+        if (!it.enc) return new File(it.path);
+        File d = new File(decDir(), it.id + "_" + it.file);
+        return d.exists() && d.length() > 0 ? d : null;
+    }
+
+    /** Файл в открытом виде (для зашифрованных — расшифрованная копия в кэше). Блокирующий вызов. */
+    private File plainFile(Library.Item it) {
+        if (!it.enc) return new File(it.path);
+        File d = new File(decDir(), it.id + "_" + it.file);
+        if (d.exists() && d.length() > 0) return d;
+        File tmp = new File(d.getPath() + ".part");
+        try (OutputStream os = new BufferedOutputStream(new FileOutputStream(tmp), 65536)) {
+            Crypto.decrypt(this, new File(it.path), os);
+        } catch (Throwable e) {
+            tmp.delete();
+            return null;
+        }
+        if (!tmp.renameTo(d)) { tmp.delete(); return null; }
+        return d;
+    }
+
+    private void cleanDecSync() {
+        File[] fs = decDir().listFiles();
+        if (fs != null) for (File f : fs) f.delete();
+    }
+
+    private void cleanDec() { io.execute(this::cleanDecSync); }
+
+    private int autoTagList(List<Library.Item> list, boolean progress) { return autoTagList(list, progress, true); }
+
+    /** Блокирующий вызов: только из фонового потока. assign=false — только запомнить вектор признаков. */
+    private int autoTagList(List<Library.Item> list, boolean progress, boolean assign) {
+        String tl = prefs.getBoolean("tag_local", false) && "ru".equals(lang) ? "ru" : "en";
+        AutoTagger tg = new AutoTagger(tl);
+        Personal ps = personal();
+        HashMap<String, List<String>> tagMap = new HashMap<>();
+        HashSet<String> live = new HashSet<>();
+        for (Library.Item o : lib.active()) { live.add(o.id); tagMap.put(o.id, Library.tagsOf(o)); }
+        ps.prune(live);
         int n = 0, i = 0;
         try {
             for (Library.Item it : list) {
                 i++;
                 if (Library.isPdf(it.name)) continue;
-                Bitmap b = Library.isVideo(it.name) ? AutoTagger.videoFrame(it.path) : decodeSampled(it.path, 640);
-                List<String> tags = tg.analyze(b);
-                if (!tags.isEmpty()) { it.tags = Library.mergeTags(it.tags, Library.joinTags(tags)); n++; }
+                File pf = plainFile(it);
+                if (pf == null) continue;
+                Bitmap b = Library.isVideo(it.name) ? AutoTagger.videoFrame(pf.getAbsolutePath()) : decodeSampled(pf.getAbsolutePath(), 640);
+                AutoTagger.Result r = tg.analyze(b);
+                if (!r.vec.isEmpty()) ps.put(it.id, r.vec);
+                if (assign) {
+                    ArrayList<String> tags = new ArrayList<>(r.tags);
+                    for (String x : ps.suggest(it.id, r.vec, tagMap)) if (!tags.contains(x)) tags.add(x);
+                    if (!tags.isEmpty()) {
+                        it.tags = Library.mergeTags(it.tags, Library.joinTags(tags));
+                        tagMap.put(it.id, Library.tagsOf(it));
+                        n++;
+                    }
+                }
                 if (progress) setBusy(it.name + "  (" + i + "/" + list.size() + ")", i);
             }
         } finally {
             tg.close();
+            ps.save();
         }
         return n;
     }
 
     private void autoTagUntagged() {
-        final ArrayList<Library.Item> todo = new ArrayList<>();
-        for (Library.Item it : lib.active()) if (Library.tagsOf(it).isEmpty() && !Library.isPdf(it.name)) todo.add(it);
-        if (todo.isEmpty()) { toast(t("autotag_none")); return; }
-        showBusy(t("autotag_busy"), todo.size());
+        final ArrayList<Library.Item> todo = new ArrayList<>(), learn = new ArrayList<>();
+        for (Library.Item it : lib.active()) {
+            if (Library.isPdf(it.name)) continue;
+            if (Library.tagsOf(it).isEmpty()) todo.add(it);
+            else if (!personal().has(it.id)) learn.add(it);   // размеченные вами файлы: учимся на них
+        }
+        if (todo.isEmpty() && learn.isEmpty()) { toast(t("autotag_none")); return; }
+        showBusy(t("autotag_busy"), 0);
         io.execute(() -> {
-            final int n = autoTagList(todo, true);
+            if (!learn.isEmpty()) autoTagList(learn, true, false);
+            final int n = todo.isEmpty() ? 0 : autoTagList(todo, true);
             lib.save();
             ui.post(() -> { hideBusy(); refreshAll(); toast(tf("autotag_done", n)); });
         });
+    }
+
+    // ---------- Шифрование файлов ----------
+    /** Блокирующий вызов. enc=true — зашифровать, false — расшифровать. Возвращает число обработанных файлов. */
+    private int cryptItems(List<Library.Item> list, boolean enc, boolean progress) {
+        int ok = 0, i = 0;
+        for (Library.Item it : list) {
+            i++;
+            if (it.enc == enc) continue;
+            File src = new File(it.path), tmp = new File(it.path + ".tmp");
+            try {
+                if (enc) {
+                    Thumb th = makeThumbData(it);
+                    if (it.sha.isEmpty()) { String h = Library.sha256(src); it.sha = h == null ? "" : h; }
+                    it.size = src.length();
+                    try (InputStream in = new FileInputStream(src); OutputStream os = new BufferedOutputStream(new FileOutputStream(tmp), 65536)) {
+                        Crypto.encrypt(this, in, os);
+                    }
+                    if (!Crypto.verify(this, tmp)) throw new IOException("verify");
+                    if (!tmp.renameTo(src)) throw new IOException("rename");
+                    it.enc = true;
+                    saveEncThumb(it, th);
+                } else {
+                    try (OutputStream os = new BufferedOutputStream(new FileOutputStream(tmp), 65536)) {
+                        Crypto.decrypt(this, src, os);
+                    }
+                    if (!tmp.renameTo(src)) throw new IOException("rename");
+                    it.enc = false;
+                    thumbFile(it).delete();
+                }
+                ok++;
+            } catch (Throwable e) {
+                tmp.delete();
+            }
+            if (progress) setBusy(it.name + "  (" + i + "/" + list.size() + ")", i);
+            if (i % 10 == 0) lib.save();
+        }
+        lib.save();
+        return ok;
+    }
+
+    private void startCrypt(final boolean enc) {
+        final ArrayList<Library.Item> todo = new ArrayList<>();
+        synchronized (lib) { for (Library.Item it : lib.items) if (it.enc != enc) todo.add(it); }
+        if (todo.isEmpty()) { toast(t("enc_nothing")); return; }
+        showDlg(dlg().setMessage(t(enc ? "enc_confirm_all" : "enc_confirm_dec")).setNegativeButton(t("cancel"), null)
+                .setPositiveButton(t("ok"), (d, w) -> {
+                    showBusy(t("enc_busy"), todo.size());
+                    io.execute(() -> {
+                        final int n = cryptItems(todo, enc, true);
+                        ui.post(() -> { hideBusy(); refreshAll(); toast(tf("enc_done", n)); });
+                    });
+                }));
+    }
+
+    // ---------- Название и иконка приложения ----------
+    private String appName() {
+        String n = prefs.getString("app_name", "");
+        return n == null || n.isEmpty() ? "Offline Media Vault" : n;
+    }
+
+    private File iconFile() { return new File(getFilesDir(), "custom_icon.png"); }
+
+    private void applyTaskDesc() {
+        try {
+            Bitmap b = iconFile().exists() ? BitmapFactory.decodeFile(iconFile().getAbsolutePath()) : null;
+            if (b != null) b = Bitmap.createScaledBitmap(b, 192, 192, true);
+            setTaskDescription(b == null ? new ActivityManager.TaskDescription(appName()) : new ActivityManager.TaskDescription(appName(), b));
+        } catch (Throwable ignored) { }
+    }
+
+    private void pickIcon() {
+        skipLock = true;
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        i.setType("image/*");
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        startActivityForResult(i, PICK_ICON);
+    }
+
+    private void setIconFrom(final Uri u) {
+        io.execute(() -> {
+            File raw = new File(getCacheDir(), "icon_raw");
+            boolean ok = false;
+            try (InputStream in = getContentResolver().openInputStream(u); OutputStream os = new FileOutputStream(raw)) {
+                if (in != null) { pump(in, os); ok = true; }
+            } catch (Exception ignored) { }
+            if (ok) {
+                Bitmap b = decodeSampled(raw.getAbsolutePath(), 1024);
+                if (b != null) {
+                    int side = Math.min(b.getWidth(), b.getHeight());
+                    Bitmap sq = Bitmap.createBitmap(b, (b.getWidth() - side) / 2, (b.getHeight() - side) / 2, side, side);
+                    sq = Bitmap.createScaledBitmap(sq, 512, 512, true);
+                    try (OutputStream os = new FileOutputStream(iconFile())) { sq.compress(Bitmap.CompressFormat.PNG, 100, os); } catch (Exception ignored) { }
+                }
+            }
+            raw.delete();
+            ui.post(() -> { toast(t("brand_icon_saved")); applyTaskDesc(); renderSettings(); });
+        });
+    }
+
+    private Bitmap adaptiveIcon() {
+        Bitmap src = iconFile().exists() ? BitmapFactory.decodeFile(iconFile().getAbsolutePath()) : null;
+        if (src == null) return null;
+        int sz = 432;
+        Bitmap out = Bitmap.createBitmap(sz, sz, Bitmap.Config.ARGB_8888);
+        Canvas c = new Canvas(out);
+        c.drawColor(Bitmap.createScaledBitmap(src, 1, 1, true).getPixel(0, 0));
+        int in = (int) (sz * 0.62f);
+        c.drawBitmap(Bitmap.createScaledBitmap(src, in, in, true), (sz - in) / 2f, (sz - in) / 2f, null);
+        return out;
+    }
+
+    private void pinShortcut() {
+        try {
+            if (Build.VERSION.SDK_INT < 26) { toast(t("brand_nosupport")); return; }
+            ShortcutManager sm = getSystemService(ShortcutManager.class);
+            if (sm == null || !sm.isRequestPinShortcutSupported()) { toast(t("brand_nosupport")); return; }
+            Bitmap ab = adaptiveIcon();
+            Icon ic = ab != null ? Icon.createWithAdaptiveBitmap(ab) : Icon.createWithResource(this, R.mipmap.ic_launcher_1);
+            Intent in = new Intent(this, MainActivity.class).setAction(Intent.ACTION_MAIN);
+            ShortcutInfo si = new ShortcutInfo.Builder(this, "custom_" + System.currentTimeMillis())
+                    .setShortLabel(appName()).setLongLabel(appName()).setIcon(ic).setIntent(in).build();
+            sm.requestPinShortcut(si, null);
+            toast(t("brand_done"));
+        } catch (Throwable e) {
+            toast(t("brand_nosupport"));
+        }
     }
 
     // Корзина очищается сама через N дней (по умолчанию 30)
@@ -1240,11 +1497,13 @@ public class MainActivity extends Activity {
             n.setPadding(dp(2), dp(3), dp(2), 0);
             cell.addView(n, new LinearLayout.LayoutParams(-1, -2));
         }
-        Flow tg = new Flow(this, dp(4), dp(4)).rows(tagLines);
-        for (String s : Library.tagsOf(it)) tg.addView(tagPill(s, true));
-        LinearLayout.LayoutParams tgp = new LinearLayout.LayoutParams(-1, tagBodyH(tagLines));
-        tgp.topMargin = dp(4);
-        cell.addView(tg, tgp);
+        if (tagLines > 0) {
+            Flow tg = new Flow(this, dp(4), dp(4)).rows(tagLines);
+            for (String s : Library.tagsOf(it)) tg.addView(tagPill(s, true));
+            LinearLayout.LayoutParams tgp = new LinearLayout.LayoutParams(-1, tagBodyH(tagLines));
+            tgp.topMargin = dp(4);
+            cell.addView(tg, tgp);
+        }
         cellTouch(cell, it, selection == null || selection.isEmpty());
         if (selection != null && selection.contains(it.id) && it.id.equals(popId)) {
             popId = null;
@@ -1291,7 +1550,7 @@ public class MainActivity extends Activity {
         if (vh <= 0) vh = getResources().getDisplayMetrics().heightPixels - dp(54) - dp(170);
         int gap = dp(8);
         int cw = Math.max(dp(40), (sw - dp(24) - gap * (cols - 1)) / cols);
-        int tagLines = cols >= 3 ? 1 : 2;
+        int tagLines = !prefs.getBoolean("feed_tags", false) ? 0 : cols >= 3 ? 1 : 2;
         int labelH = (showNames ? dp(20) : 0) + tagBodyH(tagLines) + dp(4);
         int cellH = cols <= 2 ? Math.max(dp(150), (vh - dp(8) - gap * 2) / 3) : (int) (cw * 1.3f) + labelH;
         int thumbH = Math.max(dp(70), cellH - labelH);
@@ -1330,6 +1589,7 @@ public class MainActivity extends Activity {
     private ScrollView feedScroll;
     private LinearLayout feedGrid;
     private TextView filterBtn, feedInfo;
+    private LinearLayout typeRow, contBar;
 
     private View buildFeed() {
         LinearLayout r = new LinearLayout(this);
@@ -1379,8 +1639,20 @@ public class MainActivity extends Activity {
         }
         feedSelBar.setVisibility(View.GONE);
         r.addView(feedSelBar, new LinearLayout.LayoutParams(-1, -2));
+        typeRow = new LinearLayout(this);
+        typeRow.setPadding(dp(12), dp(4), dp(12), dp(4));
+        r.addView(typeRow, new LinearLayout.LayoutParams(-1, -2));
+        contBar = new LinearLayout(this);
+        contBar.setGravity(Gravity.CENTER_VERTICAL);
+        contBar.setPadding(dp(14), dp(10), dp(14), dp(10));
+        contBar.setBackground(round(PANEL, 18));
+        LinearLayout.LayoutParams cbp = new LinearLayout.LayoutParams(-1, -2);
+        cbp.setMargins(dp(12), dp(2), dp(12), dp(6));
+        contBar.setVisibility(View.GONE);
+        r.addView(contBar, cbp);
         feedInfo = tv("", 12, MUTED, false);
         feedInfo.setPadding(dp(16), 0, dp(16), dp(8));
+        feedInfo.setOnClickListener(v -> { if (sortMode == 2) { shuffleSeed = System.nanoTime(); animGrid = true; renderFeed(); } });
         r.addView(feedInfo, new LinearLayout.LayoutParams(-1, -2));
         feedScroll = new ScrollView(this);
         feedGrid = new LinearLayout(this);
@@ -1429,6 +1701,65 @@ public class MainActivity extends Activity {
                 }));
     }
 
+    // 1 фото, 2 видео, 3 GIF, 4 манга/PDF
+    private int typeOf(Library.Item it) {
+        String n = it.name.toLowerCase(Locale.ROOT);
+        if (n.endsWith(".gif")) return 3;
+        if (Library.isVideo(n)) return 2;
+        if (Library.isPdf(n)) return 4;
+        return 1;
+    }
+
+    private void renderTypeRow() {
+        int[] cnt = new int[5];
+        for (Library.Item it : lib.active()) { cnt[typeOf(it)]++; cnt[0]++; }
+        typeRow.removeAllViews();
+        String[] names = {t("type_all"), t("type_photo"), t("type_video"), t("type_gif"), t("type_pdf")};
+        for (int i = 0; i < 5; i++) {
+            if (i > 0 && cnt[i] == 0 && typeFilter != i) continue;
+            final int k = i;
+            TextView c = chip(names[i] + (i > 0 ? "  " + cnt[i] : ""), typeFilter == i);
+            c.setOnClickListener(v -> { typeFilter = k; animGrid = true; renderFeed(); });
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
+            lp.setMarginEnd(dp(8));
+            typeRow.addView(c, lp);
+        }
+        typeRow.setVisibility(cnt[0] == 0 ? View.GONE : View.VISIBLE);
+    }
+
+    // «Продолжить просмотр»: последний открытый файл
+    private void renderContinue(final ArrayList<Library.Item> list) {
+        contBar.removeAllViews();
+        String lid = prefs.getString("last_id", null);
+        Library.Item last = null;
+        if (lid != null) for (Library.Item it : lib.active()) if (it.id.equals(lid)) { last = it; break; }
+        if (last == null || !feedSel.isEmpty()) { contBar.setVisibility(View.GONE); return; }
+        final Library.Item li = last;
+        contBar.setVisibility(View.VISIBLE);
+        contBar.addView(makeThumb(li), new LinearLayout.LayoutParams(dp(46), dp(46)));
+        LinearLayout tx = new LinearLayout(this);
+        tx.setOrientation(LinearLayout.VERTICAL);
+        tx.setPadding(dp(12), 0, dp(8), 0);
+        tx.addView(tv("▶ " + t("continue_view"), 14, ACCENT, true));
+        String sub = li.name;
+        int vp = prefs.getInt("vp_" + li.id, 0), pg = prefs.getInt("pg_" + li.id, 0);
+        if (Library.isVideo(li.name) && vp > 0) sub += " · " + fmtDur(vp);
+        else if (Library.isPdf(li.name) && pg > 0) sub += " · " + tf("page_n", pg + 1, 0).replace(" / 0", "");
+        TextView st = tv(sub, 12, MUTED, false);
+        st.setSingleLine(true);
+        st.setEllipsize(TextUtils.TruncateAt.END);
+        tx.addView(st);
+        contBar.addView(tx, new LinearLayout.LayoutParams(0, -2, 1));
+        contBar.setOnClickListener(v -> {
+            ArrayList<Library.Item> src = filtered();
+            int ix = -1;
+            for (int i = 0; i < src.size(); i++) if (src.get(i).id.equals(li.id)) { ix = i; break; }
+            if (ix < 0) { src = new ArrayList<>(); src.add(li); ix = 0; }
+            openViewer(src, ix);
+        });
+        pressFx(contBar);
+    }
+
     private ArrayList<Library.Item> filtered() {
         ArrayList<Library.Item> out = new ArrayList<>();
         for (Library.Item it : lib.active()) {
@@ -1437,13 +1768,15 @@ public class MainActivity extends Activity {
             for (String x : excTags) if (ts.contains(x)) { banned = true; break; }
             if (banned) continue;
             if (favOnly && !it.fav) continue;
+            if (typeFilter != 0 && typeOf(it) != typeFilter) continue;
             boolean ok;
             if (incTags.isEmpty()) ok = true;
             else if (matchAll) ok = ts.containsAll(incTags);
             else { ok = false; for (String x : incTags) if (ts.contains(x)) { ok = true; break; } }
             if (ok) out.add(it);
         }
-        Collections.sort(out, (m1, m2) -> newestFirst ? Long.compare(m2.added, m1.added) : Long.compare(m1.added, m2.added));
+        if (sortMode == 2) Collections.shuffle(out, new java.util.Random(shuffleSeed));
+        else Collections.sort(out, (m1, m2) -> sortMode == 0 ? Long.compare(m2.added, m1.added) : Long.compare(m1.added, m2.added));
         return out;
     }
 
@@ -1459,16 +1792,19 @@ public class MainActivity extends Activity {
         feedHead.setVisibility(fmode ? View.GONE : View.VISIBLE);
         fadeVis(feedSelBar, fmode);
         feedSelCount.setText(tf("sel_n", feedSel.size()));
-        int active = incTags.size() + excTags.size() + (newestFirst ? 0 : 1) + (favOnly ? 1 : 0);
+        int active = incTags.size() + excTags.size() + (sortMode == 0 ? 0 : 1) + (favOnly ? 1 : 0);
         filterBtn.setText(active > 0 ? t("filter") + " · " + active : t("filter"));
         filterBtn.setTextColor(active > 0 ? ONACC : FG);
         filterBtn.setBackground(round(active > 0 ? ACCENT : BTN, 20));
         final ArrayList<Library.Item> list = filtered();
+        renderTypeRow();
+        renderContinue(list);
         StringBuilder sb = new StringBuilder();
         sb.append(tf("count_of", list.size(), lib.active().size()));
         if (!incTags.isEmpty()) sb.append(" · ").append(tf("with_tags", TextUtils.join(", ", incTags)));
         if (!excTags.isEmpty()) sb.append(" · ").append(tf("hidden_tags", TextUtils.join(", ", excTags)));
-        if (!newestFirst) sb.append(" · ").append(t("oldest_first_note"));
+        if (sortMode == 1) sb.append(" · ").append(t("oldest_first_note"));
+        else if (sortMode == 2) sb.append(" · ").append(t("random_note"));
         feedInfo.setText(sb.toString());
         feedGrid.removeAllViews();
         if (list.isEmpty()) {
@@ -1511,7 +1847,8 @@ public class MainActivity extends Activity {
 
     private void openFilter() {
         final LinkedHashSet<String> inc = new LinkedHashSet<>(incTags), exc = new LinkedHashSet<>(excTags);
-        final boolean[] st = {matchAll, newestFirst, favOnly};
+        final boolean[] st = {matchAll, true, favOnly};
+        final int[] sortSel = {sortMode};
         final TreeMap<String, Integer> counts = allTagCounts();
         final Dialog d = new Dialog(this, android.R.style.Theme_Material_Dialog_NoActionBar);
 
@@ -1627,7 +1964,7 @@ public class MainActivity extends Activity {
             addCard(holder, c3);
             LinearLayout c4 = card();
             c4.addView(cardTitle(t("sec_sort")));
-            c4.addView(segmented(new String[]{t("sort_new"), t("sort_old")}, st[1] ? 0 : 1, i -> { st[1] = i == 0; draw[0].run(); }));
+            c4.addView(segmented(new String[]{t("sort_new"), t("sort_old"), "🎲 " + t("sort_random")}, sortSel[0], i -> { sortSel[0] = i; draw[0].run(); }));
             addCard(holder, c4);
         };
         q.addTextChangedListener(new android.text.TextWatcher() {
@@ -1639,7 +1976,9 @@ public class MainActivity extends Activity {
         applyB.setOnClickListener(v -> {
             incTags.clear(); incTags.addAll(inc);
             excTags.clear(); excTags.addAll(exc);
-            matchAll = st[0]; newestFirst = st[1]; favOnly = st[2];
+            matchAll = st[0]; favOnly = st[2];
+            sortMode = sortSel[0];
+            if (sortMode == 2) shuffleSeed = System.nanoTime();
             animGrid = true;
             renderFeed();
             d.dismiss();
@@ -2980,12 +3319,29 @@ public class MainActivity extends Activity {
             mpRef[0] = null;
             final Library.Item it = list.get(idx[0]);
             curId[0] = it.id;
+            prefs.edit().putString("last_id", it.id).apply();
             counter.setText((idx[0] + 1) + " / " + list.size());
             nameTv.setText(it.name);
             updFav.run();
-            final File f = new File(it.path);
+            File f0 = new File(it.path);
+            if (it.enc) {
+                File pc = plainCached(it);
+                if (pc == null) {
+                    metaTv.setText("🔒 …");
+                    pool.execute(() -> {
+                        final File pf = plainFile(it);
+                        ui.post(() -> {
+                            if (my != token[0]) return;
+                            if (pf != null) show[0].run(); else toast(t("integrity_bad"));
+                        });
+                    });
+                    return;
+                }
+                f0 = pc;
+            }
+            final File f = f0;
             String kind = Library.isPdf(it.name) ? t("kind_manga") : Library.isVideo(it.name) ? t("kind_video") : t("kind_photo");
-            metaTv.setText(kind + " · " + fmtSize(f.length()) + " · " + DateFormat.getDateInstance(DateFormat.MEDIUM, new Locale(lang)).format(new Date(it.added)));
+            metaTv.setText((it.enc ? "🔒 " : "") + kind + " · " + fmtSize(f.length()) + " · " + DateFormat.getDateInstance(DateFormat.MEDIUM, new Locale(lang)).format(new Date(it.added)));
             tagsUpd[0].run();
             int arrows = list.size() > 1 && top.getVisibility() == View.VISIBLE ? View.VISIBLE : View.GONE;
             prev.setVisibility(arrows);
@@ -3077,6 +3433,7 @@ public class MainActivity extends Activity {
             if (mcRef[0] != null) mcRef[0].hide();
             stopMedia(media);
             closePdf(pdf);
+            cleanDec();
             refreshAll();
         });
         openDialogs.add(dialog);
@@ -3323,6 +3680,7 @@ public class MainActivity extends Activity {
 
     private void showLock() {
         authed = false;
+        cleanDec();
         for (Dialog d : new ArrayList<>(openDialogs)) { try { if (d.isShowing()) d.dismiss(); } catch (Exception ignored) { } }
         openDialogs.clear();
         pinBuf.setLength(0);
@@ -3523,6 +3881,10 @@ public class MainActivity extends Activity {
         crp.topMargin = dp(10);
         setBox.addView(settingRow(t("set_columns"), stepper), crp);
 
+        final TextView ftChip = toggleChip(prefs.getBoolean("feed_tags", false));
+        ftChip.setOnClickListener(v -> { prefs.edit().putBoolean("feed_tags", !prefs.getBoolean("feed_tags", false)).apply(); renderSettings(); });
+        setBox.addView(settingRow(t("feed_tags_sw"), ftChip), new LinearLayout.LayoutParams(-1, -2));
+
         TextView namesChip = toggleChip(showNames);
         namesChip.setOnClickListener(v -> { showNames = !showNames; prefs.edit().putBoolean("names", showNames).apply(); renderSettings(); });
         setBox.addView(settingRow(t("set_names"), namesChip), new LinearLayout.LayoutParams(-1, -2));
@@ -3608,6 +3970,56 @@ public class MainActivity extends Activity {
             setBox.addView(settingRow(t("bg_dim"), dimSt), new LinearLayout.LayoutParams(-1, -2));
         }
 
+        setBox.addView(sectionLabel(t("set_brand")));
+        TextView nameBtn = button("✎  " + appName());
+        nameBtn.setSingleLine(true);
+        nameBtn.setEllipsize(TextUtils.TruncateAt.END);
+        nameBtn.setMaxWidth(dp(190));
+        nameBtn.setPadding(dp(14), 0, dp(14), 0);
+        nameBtn.setOnClickListener(v -> promptText(t("brand_name"), prefs.getString("app_name", ""), "Offline Media Vault", nm -> {
+            prefs.edit().putString("app_name", nm).apply();
+            applyTaskDesc();
+            renderSettings();
+        }));
+        setBox.addView(settingRow(t("brand_name"), nameBtn), new LinearLayout.LayoutParams(-1, dp(52)));
+        LinearLayout icRow = new LinearLayout(this);
+        icRow.setGravity(Gravity.CENTER_VERTICAL);
+        ImageView icPrev = new ImageView(this);
+        icPrev.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        icPrev.setOutlineProvider(new ViewOutlineProvider() {
+            @Override public void getOutline(View v, Outline o) { o.setRoundRect(0, 0, v.getWidth(), v.getHeight(), dp(14)); }
+        });
+        icPrev.setClipToOutline(true);
+        if (iconFile().exists()) icPrev.setImageBitmap(BitmapFactory.decodeFile(iconFile().getAbsolutePath()));
+        else icPrev.setImageResource(ICON_PREV[Math.min(curIcon(), ICON_PREV.length - 1)]);
+        icRow.addView(icPrev, new LinearLayout.LayoutParams(dp(48), dp(48)));
+        TextView pickIc = button(t("brand_icon_pick"));
+        pickIc.setOnClickListener(v -> pickIcon());
+        LinearLayout.LayoutParams pip = new LinearLayout.LayoutParams(0, dp(48), 1);
+        pip.setMarginStart(dp(10));
+        icRow.addView(pickIc, pip);
+        LinearLayout.LayoutParams icp = new LinearLayout.LayoutParams(-1, -2);
+        icp.topMargin = dp(8);
+        setBox.addView(icRow, icp);
+        TextView shortB = primaryButton(t("brand_shortcut"));
+        shortB.setOnClickListener(v -> pinShortcut());
+        LinearLayout.LayoutParams sbp = params(-1, 46);
+        sbp.topMargin = dp(8);
+        setBox.addView(shortB, sbp);
+        TextView brReset = button(t("brand_reset"));
+        brReset.setOnClickListener(v -> {
+            prefs.edit().remove("app_name").apply();
+            iconFile().delete();
+            applyTaskDesc();
+            renderSettings();
+        });
+        LinearLayout.LayoutParams brp = params(-1, 44);
+        brp.topMargin = dp(8);
+        setBox.addView(brReset, brp);
+        TextView brNote = tv(t("brand_note"), 11.5f, MUTED, false);
+        brNote.setPadding(0, dp(8), 0, 0);
+        setBox.addView(brNote, new LinearLayout.LayoutParams(-1, -2));
+
         setBox.addView(sectionLabel(t("set_security")));
         if (!decoy) {
             setBox.addView(settingRow(t("pin_code"), tv(hasPin() ? t("pin_on") : t("pin_off"), 14, hasPin() ? ACCENT : MUTED, true)), new LinearLayout.LayoutParams(-1, -2));
@@ -3659,6 +4071,24 @@ public class MainActivity extends Activity {
         shotsChip.setOnClickListener(v -> { prefs.edit().putBoolean("no_shots", !prefs.getBoolean("no_shots", false)).apply(); applySecure(); renderSettings(); });
         setBox.addView(settingRow(t("no_shots"), shotsChip), new LinearLayout.LayoutParams(-1, -2));
 
+        setBox.addView(sectionLabel(t("set_protect")));
+        final TextView encChip = toggleChip(prefs.getBoolean("enc_new", false));
+        encChip.setOnClickListener(v -> { prefs.edit().putBoolean("enc_new", !prefs.getBoolean("enc_new", false)).apply(); renderSettings(); });
+        setBox.addView(settingRow(t("enc_new"), encChip), new LinearLayout.LayoutParams(-1, -2));
+        TextView encAll = primaryButton(t("enc_all"));
+        encAll.setOnClickListener(v -> startCrypt(true));
+        LinearLayout.LayoutParams eap = params(-1, 46);
+        eap.topMargin = dp(8);
+        setBox.addView(encAll, eap);
+        TextView decAll = button(t("dec_all"));
+        decAll.setOnClickListener(v -> startCrypt(false));
+        LinearLayout.LayoutParams dap = params(-1, 46);
+        dap.topMargin = dp(8);
+        setBox.addView(decAll, dap);
+        TextView encNote = tv(t("enc_note"), 11.5f, MUTED, false);
+        encNote.setPadding(0, dp(8), 0, 0);
+        setBox.addView(encNote, new LinearLayout.LayoutParams(-1, -2));
+
         setBox.addView(sectionLabel(t("set_smart")));
         final TextView atChip = toggleChip(prefs.getBoolean("autotag_new", true));
         atChip.setOnClickListener(v -> { prefs.edit().putBoolean("autotag_new", !prefs.getBoolean("autotag_new", true)).apply(); renderSettings(); });
@@ -3669,6 +4099,13 @@ public class MainActivity extends Activity {
         TextView atRun = primaryButton(t("autotag_run"));
         atRun.setOnClickListener(v -> autoTagUntagged());
         setBox.addView(atRun, params(-1, 46));
+        final TextView tlChip = toggleChip(prefs.getBoolean("tag_local", false));
+        tlChip.setOnClickListener(v -> { prefs.edit().putBoolean("tag_local", !prefs.getBoolean("tag_local", false)).apply(); renderSettings(); });
+        LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(-1, -2);
+        tlp.topMargin = dp(10);
+        setBox.addView(settingRow(t("tag_local_sw"), tlChip), tlp);
+        TextView tlNote = tv(t("tag_local_note"), 11.5f, MUTED, false);
+        setBox.addView(tlNote, new LinearLayout.LayoutParams(-1, -2));
         TextView trLbl = tv(t("trash_auto"), 15, FG, false);
         trLbl.setPadding(0, dp(14), 0, dp(6));
         setBox.addView(trLbl, new LinearLayout.LayoutParams(-1, -2));
@@ -3691,6 +4128,11 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams dbp = params(-1, 48);
         dbp.topMargin = dp(8);
         setBox.addView(dupB, dbp);
+        TextView intB = button(t("int_btn"));
+        intB.setOnClickListener(v -> openIntegrity());
+        LinearLayout.LayoutParams ibp = params(-1, 48);
+        ibp.topMargin = dp(8);
+        setBox.addView(intB, ibp);
 
         setBox.addView(sectionLabel(t("set_data")));
         TextView exp = button(t("export_all"));
@@ -3708,9 +4150,10 @@ public class MainActivity extends Activity {
         rs.setOnClickListener(v -> showDlg(dlg().setTitle(t("reset_settings")).setMessage(t("reset_msg"))
                 .setNegativeButton(t("cancel"), null)
                 .setPositiveButton(t("reset"), (d, w) -> {
-                    prefs.edit().remove("lang").remove("theme").remove("cols").remove("names").remove("bgdim").remove("bgres").remove("auto_icon").remove("autotag_new").remove("trash_days")
+                    prefs.edit().remove("lang").remove("theme").remove("cols").remove("names").remove("bgdim").remove("bgres").remove("auto_icon").remove("autotag_new").remove("trash_days").remove("app_name").remove("feed_tags").remove("tag_local").remove("enc_new")
                             .remove("no_shots").remove("hide_recents").remove("mmode").apply();
                     bgFile().delete();
+                    iconFile().delete();
                     setIcon(0, true);
                     toast(t("reset_done"));
                     recreate();
@@ -3718,13 +4161,149 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams rsp = params(-1, 48);
         rsp.topMargin = dp(10);
         setBox.addView(rs, rsp);
-        TextView ver = tv("Offline Media Vault · v1.8", 11, MUTED, false);
+        TextView ver = tv("Offline Media Vault · v1.9", 11, MUTED, false);
         ver.setGravity(Gravity.CENTER);
         ver.setPadding(0, dp(18), 0, 0);
         ver.setTag("ver");
         setBox.addView(ver, new LinearLayout.LayoutParams(-1, -2));
         groupCards();
         fxTree(setBox);
+    }
+
+    // ---------- Проверка целостности ----------
+    private boolean decodeOk(Library.Item it, File f) {
+        try {
+            if (Library.isVideo(it.name)) {
+                MediaMetadataRetriever r = new MediaMetadataRetriever();
+                try {
+                    r.setDataSource(f.getAbsolutePath());
+                    String d = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);
+                    return d != null && Long.parseLong(d) > 0;
+                } finally { try { r.release(); } catch (Exception ignored) { } }
+            } else if (Library.isPdf(it.name)) {
+                try (ParcelFileDescriptor pfd = ParcelFileDescriptor.open(f, ParcelFileDescriptor.MODE_READ_ONLY)) {
+                    PdfRenderer r = new PdfRenderer(pfd);
+                    int n = r.getPageCount();
+                    r.close();
+                    return n > 0;
+                }
+            } else {
+                BitmapFactory.Options o = new BitmapFactory.Options();
+                o.inJustDecodeBounds = true;
+                BitmapFactory.decodeFile(f.getAbsolutePath(), o);
+                return o.outWidth > 0 && o.outHeight > 0;
+            }
+        } catch (Throwable e) {
+            return false;
+        }
+    }
+
+    private void openIntegrity() {
+        final Dialog d = new Dialog(this, android.R.style.Theme_Black_NoTitleBar_Fullscreen);
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setBackgroundColor(BG);
+        root.setOnApplyWindowInsetsListener((v, insets) -> {
+            v.setPadding(insets.getSystemWindowInsetLeft(), insets.getSystemWindowInsetTop(), insets.getSystemWindowInsetRight(), insets.getSystemWindowInsetBottom());
+            return insets;
+        });
+        LinearLayout head = new LinearLayout(this);
+        head.setGravity(Gravity.CENTER_VERTICAL);
+        head.setPadding(dp(8), dp(10), dp(12), dp(4));
+        TextView close = tv("✕", 20, FG, true);
+        close.setGravity(Gravity.CENTER);
+        close.setOnClickListener(v -> d.dismiss());
+        head.addView(close, new LinearLayout.LayoutParams(dp(44), dp(44)));
+        TextView ttl = tv(t("int_title"), 19, FG, true);
+        ttl.setPadding(dp(8), 0, 0, 0);
+        head.addView(ttl, new LinearLayout.LayoutParams(0, -2, 1));
+        root.addView(head, new LinearLayout.LayoutParams(-1, -2));
+        ScrollView sv = new ScrollView(this);
+        final LinearLayout body = new LinearLayout(this);
+        body.setOrientation(LinearLayout.VERTICAL);
+        body.setPadding(dp(16), dp(8), dp(16), dp(20));
+        sv.addView(body);
+        root.addView(sv, new LinearLayout.LayoutParams(-1, 0, 1));
+        final TextView scanning = tv(tf("int_scanning", 0, 0), 14, MUTED, false);
+        scanning.setGravity(Gravity.CENTER);
+        scanning.setPadding(0, dp(40), 0, dp(12));
+        body.addView(scanning, new LinearLayout.LayoutParams(-1, -2));
+        final ProgressBar bar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        body.addView(bar, new LinearLayout.LayoutParams(-1, -2));
+        d.setContentView(root);
+        animWin(d, R.style.OmvSheetAnim);
+        openDialogs.add(d);
+        d.show();
+        final ArrayList<Library.Item> all = new ArrayList<>();
+        synchronized (lib) { all.addAll(lib.items); }
+        bar.setMax(Math.max(1, all.size()));
+        io.execute(() -> {
+            final ArrayList<Library.Item> bad = new ArrayList<>();
+            final ArrayList<String> why = new ArrayList<>();
+            int base = 0, i = 0;
+            for (Library.Item it : all) {
+                i++;
+                File f = new File(it.path);
+                String problem = null;
+                if (!f.exists()) problem = "int_r_missing";
+                else if (f.length() == 0) problem = "int_r_empty";
+                else if (it.enc) { if (!Crypto.verify(this, f)) problem = "int_r_mac"; }
+                else {
+                    if (!it.sha.isEmpty()) {
+                        String h = Library.sha256(f);
+                        if (h == null || !h.equals(it.sha)) problem = "int_r_hash";
+                    }
+                    if (problem == null && !decodeOk(it, f)) problem = "int_r_decode";
+                    if (problem == null && it.sha.isEmpty()) {
+                        String h = Library.sha256(f);
+                        if (h != null) { it.sha = h; it.size = f.length(); base++; }
+                    }
+                }
+                if (problem != null) { bad.add(it); why.add(problem); }
+                final int cur = i, tot = all.size();
+                ui.post(() -> { scanning.setText(tf("int_scanning", cur, tot)); bar.setProgress(cur); });
+            }
+            if (base > 0) lib.save();
+            final int fb = base, total = all.size();
+            ui.post(() -> {
+                body.removeAllViews();
+                TextView sum = tv(tf("int_summary", total, bad.size(), fb), 13, MUTED, false);
+                sum.setPadding(dp(2), dp(8), 0, dp(12));
+                body.addView(sum, new LinearLayout.LayoutParams(-1, -2));
+                if (bad.isEmpty()) {
+                    TextView okT = tv(t("int_ok"), 18, TAG_GREEN, true);
+                    okT.setGravity(Gravity.CENTER);
+                    okT.setPadding(0, dp(40), 0, 0);
+                    body.addView(okT, new LinearLayout.LayoutParams(-1, -2));
+                    return;
+                }
+                TextView all2 = button(t("int_trash_all"));
+                all2.setTextColor(0xFFFFFFFF);
+                all2.setBackground(round(RED, 12));
+                all2.setOnClickListener(v -> {
+                    for (Library.Item it : bad) if (!it.trashed) lib.moveToTrash(it);
+                    lib.save();
+                    refreshAll();
+                    toast(tf("moved_trash", bad.size()));
+                    d.dismiss();
+                });
+                body.addView(all2, params(-1, 46));
+                for (int k = 0; k < bad.size(); k++) {
+                    final Library.Item it = bad.get(k);
+                    LinearLayout card = card();
+                    card.setOrientation(LinearLayout.VERTICAL);
+                    TextView nm = tv(it.name, 14, FG, true);
+                    nm.setMaxLines(2);
+                    nm.setEllipsize(TextUtils.TruncateAt.END);
+                    card.addView(nm);
+                    card.addView(tv(t(why.get(k)), 12.5f, RED, false));
+                    LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(-1, -2);
+                    cp.topMargin = dp(10);
+                    body.addView(card, cp);
+                }
+                fxTree(body);
+            });
+        });
     }
 
     // ---------- Дубликаты ----------
@@ -4272,6 +4851,8 @@ public class MainActivity extends Activity {
             exportAll(data.getData());
         } else if (requestCode == PICK_BG && data.getData() != null) {
             setBgFrom(data.getData());
+        } else if (requestCode == PICK_ICON && data.getData() != null) {
+            setIconFrom(data.getData());
         }
     }
 
@@ -4323,6 +4904,7 @@ public class MainActivity extends Activity {
             if (prefs.getBoolean("autotag_new", true) && !newItems.isEmpty()) {
                 autoTagList(newItems, true);
             }
+            if (prefs.getBoolean("enc_new", false) && !newItems.isEmpty()) cryptItems(newItems, true, false);
             lib.save();
             final int n = added;
             ui.post(() -> { hideBusy(); refreshAll(); toast(tf("imported_n", n)); });
@@ -4417,7 +4999,8 @@ public class MainActivity extends Activity {
                     File f = new File(it.path);
                     if (f.exists()) {
                         zos.putNextEntry(new ZipEntry("media/" + it.file));
-                        try (InputStream in = new FileInputStream(f)) { pump(in, zos); }
+                        if (it.enc) Crypto.decrypt(this, f, zos);
+                        else try (InputStream in = new FileInputStream(f)) { pump(in, zos); }
                         zos.closeEntry();
                         n++;
                     }

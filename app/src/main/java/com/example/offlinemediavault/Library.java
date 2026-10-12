@@ -28,8 +28,9 @@ import java.util.Random;
 final class Library {
     static class Item {
         String id = "", name = "", file = "", tags = "", album = "", path = "";
-        long added, trashedAt;
-        boolean trashed, fav;
+        long added, trashedAt, size;
+        boolean trashed, fav, enc;
+        String sha = "";
     }
 
     // Один файл может лежать в нескольких альбомах: item.album хранит id через запятую
@@ -176,7 +177,11 @@ final class Library {
     }
 
     private void bind(Item it) {
-        it.path = new File(mediaDir, it.file).getAbsolutePath();
+        File f = new File(mediaDir, it.file);
+        it.path = f.getAbsolutePath();
+        // самовосстановление: ориентируемся на сам файл, если запись и файл разошлись (сбой посреди шифрования)
+        boolean magic = Crypto.hasMagic(f);
+        if (magic != it.enc && f.exists()) it.enc = magic;
     }
 
     // ---------- загрузка / сохранение ----------
@@ -233,6 +238,9 @@ final class Library {
                     it.trashed = j.optBoolean("trashed", false);
                     it.trashedAt = j.optLong("trashedAt", 0);
                     it.fav = j.optBoolean("fav", false);
+                    it.enc = j.optBoolean("enc", false);
+                    it.sha = j.optString("sha", "");
+                    it.size = j.optLong("size", 0);
                     bind(it);
                     items.add(it);
                 }
@@ -316,6 +324,9 @@ final class Library {
                 j.put("trashed", it.trashed);
                 j.put("trashedAt", it.trashedAt);
                 j.put("fav", it.fav);
+                if (it.enc) j.put("enc", true);
+                if (!it.sha.isEmpty()) j.put("sha", it.sha);
+                if (it.size > 0) j.put("size", it.size);
                 ia.put(j);
             }
             o.put("items", ia);
@@ -464,7 +475,7 @@ final class Library {
         synchronized (this) { snap = active(); }
         HashMap<Long, ArrayList<Item>> bySize = new HashMap<>();
         for (Item it : snap) {
-            long len = new File(it.path).length();
+            long len = it.enc ? it.size : new File(it.path).length();
             if (len <= 0) continue;
             ArrayList<Item> l = bySize.get(len);
             if (l == null) { l = new ArrayList<>(); bySize.put(len, l); }
@@ -475,7 +486,7 @@ final class Library {
             if (same.size() < 2) continue;
             HashMap<String, ArrayList<Item>> byHash = new HashMap<>();
             for (Item it : same) {
-                String h = sha256(new File(it.path));
+                String h = it.enc ? (it.sha.isEmpty() ? null : it.sha) : sha256(new File(it.path));
                 if (h == null) continue;
                 ArrayList<Item> l = byHash.get(h);
                 if (l == null) { l = new ArrayList<>(); byHash.put(h, l); }
