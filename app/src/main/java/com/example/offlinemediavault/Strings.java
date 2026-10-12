@@ -653,5 +653,15 @@ final class Strings {
         b("type_gif", "GIF", "GIF", "GIF", "GIF");
         a("type_pdf", "Manga", "Манга", "Manga", "مانگا");
         b("type_pdf", "Manga", "Manga", "漫画", "マンガ");
+        a("undo", "Undo", "Отменить", "Deshacer", "واگرد");
+        b("undo", "Rückgängig", "Annuler", "撤销", "元に戻す");
+        a("crash_title", "The app closed unexpectedly", "Приложение неожиданно закрылось", "La app se cerró inesperadamente", "برنامه به‌طور غیرمنتظره بسته شد");
+        b("crash_title", "Die App wurde unerwartet beendet", "L'app s'est fermée de façon inattendue", "应用意外关闭", "アプリが予期せず終了しました");
+        a("crash_msg", "An error report was saved. Copy it and send it to the developer so the problem can be fixed. It contains no photos or file names.", "Сохранён отчёт об ошибке. Скопируйте его и отправьте разработчику, чтобы проблему исправили. В нём нет фото и имён файлов.", "Se guardó un informe de error. Cópialo y envíalo al desarrollador. No contiene fotos ni nombres de archivos.", "گزارش خطا ذخیره شد. آن را کپی کنید و برای توسعه‌دهنده بفرستید. شامل عکس یا نام فایل نیست.");
+        b("crash_msg", "Ein Fehlerbericht wurde gespeichert. Kopieren und an den Entwickler senden. Er enthält keine Fotos oder Dateinamen.", "Un rapport d'erreur a été enregistré. Copiez-le et envoyez-le au développeur. Il ne contient ni photos ni noms de fichiers.", "已保存错误报告。请复制并发送给开发者以便修复。报告不含照片或文件名。", "エラーレポートを保存しました。コピーして開発者に送ってください。写真やファイル名は含まれません。");
+        a("crash_copy", "Copy report", "Скопировать отчёт", "Copiar informe", "کپی گزارش");
+        b("crash_copy", "Bericht kopieren", "Copier le rapport", "复制报告", "レポートをコピー");
+        a("crash_copied", "Report copied", "Отчёт скопирован", "Informe copiado", "گزارش کپی شد");
+        b("crash_copied", "Bericht kopiert", "Rapport copié", "报告已复制", "コピーしました");
     }
 }

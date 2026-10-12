@@ -12,6 +12,9 @@ import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.content.pm.ShortcutInfo;
 import android.content.pm.ShortcutManager;
+import android.content.ClipData;
+import android.content.ClipboardManager;
+import android.content.res.ColorStateList;
 import android.content.res.Configuration;
 import android.database.Cursor;
 import android.graphics.Bitmap;
@@ -24,6 +27,8 @@ import android.graphics.Path;
 import android.graphics.Rect;
 import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
+import android.graphics.drawable.Drawable;
+import android.graphics.drawable.RippleDrawable;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.Icon;
 import android.graphics.drawable.InsetDrawable;
@@ -44,6 +49,10 @@ import android.transition.TransitionManager;
 import android.text.TextUtils;
 import android.util.LruCache;
 import android.view.GestureDetector;
+import android.view.HapticFeedbackConstants;
+import android.view.animation.DecelerateInterpolator;
+import android.text.SpannableString;
+import android.text.style.RelativeSizeSpan;
 import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
@@ -72,6 +81,7 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.io.PrintWriter;
 import java.security.MessageDigest;
 import java.text.DateFormat;
 import java.text.SimpleDateFormat;
@@ -269,10 +279,55 @@ public class MainActivity extends Activity {
             if ("com.example.offlinemediavault.UPLOAD".equals(act0)) { startTab = 2; pendingPick = true; }
             else if ("com.example.offlinemediavault.FAVORITES".equals(act0)) { startTab = 1; albumOpen = Library.FAV; }
         }
+        installCrashHook();
         buildAll();
         applyTaskDesc();
         if (hasPin() && !authed) showLock();
+        else if (b == null) {
+            shell.setAlpha(0f);
+            shell.setTranslationY(dp(18));
+            shell.animate().alpha(1f).translationY(0f).setDuration(420).setInterpolator(new DecelerateInterpolator(2f)).start();
+        }
+        ui.postDelayed(this::checkCrash, 700);
         else if (pendingPick) { pendingPick = false; ui.post(this::pickMedia); }
+    }
+
+    private static boolean crashHook = false;
+
+    // Отчёт о сбое: сохраняется в файл и предлагается при следующем запуске
+    private void installCrashHook() {
+        if (crashHook) return;
+        crashHook = true;
+        final Thread.UncaughtExceptionHandler prev = Thread.getDefaultUncaughtExceptionHandler();
+        final File cf = new File(getFilesDir(), "crash.txt");
+        String ver = "?";
+        try { ver = getPackageManager().getPackageInfo(getPackageName(), 0).versionName; } catch (Exception ignored) { }
+        final String head = "Offline Media Vault " + ver + " · Android " + Build.VERSION.RELEASE + " (API " + Build.VERSION.SDK_INT + ") · " + Build.MANUFACTURER + " " + Build.MODEL;
+        Thread.setDefaultUncaughtExceptionHandler((th, ex) -> {
+            try (PrintWriter pw = new PrintWriter(new FileOutputStream(cf))) {
+                pw.println(head);
+                pw.println(new Date().toString());
+                ex.printStackTrace(pw);
+            } catch (Throwable ignored) { }
+            if (prev != null) prev.uncaughtException(th, ex);
+        });
+    }
+
+    private void checkCrash() {
+        final File cf = new File(getFilesDir(), "crash.txt");
+        if (!cf.exists() || isFinishing()) return;
+        String txt;
+        try { txt = Library.readText(cf); } catch (Exception e) { txt = ""; }
+        cf.delete();
+        if (txt.isEmpty()) return;
+        final String report = txt;
+        showDlg(dlg().setTitle(t("crash_title")).setMessage(t("crash_msg"))
+                .setNegativeButton(t("cancel"), null)
+                .setPositiveButton(t("crash_copy"), (d, w) -> {
+                    ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                    if (cm != null) cm.setPrimaryClip(ClipData.newPlainText("crash", report));
+                    toast(t("crash_copied"));
+                }));
     }
 
     private boolean pendingPick = false;
@@ -406,7 +461,64 @@ public class MainActivity extends Activity {
     // ---------- Мелкие помощники ----------
     private String t(String k) { return Strings.get(lang, k); }
     private String tf(String k, Object... a) { return String.format(Locale.ROOT, Strings.get(lang, k), a); }
-    private void toast(String s) { Toast.makeText(this, s, Toast.LENGTH_SHORT).show(); }
+    private void toast(String s) { snack(s, null, null); }
+
+    private LinearLayout snackView;
+    private int snackToken = 0;
+
+    private boolean dialogShowing() {
+        for (Dialog d : openDialogs) { try { if (d.isShowing()) return true; } catch (Exception ignored) { } }
+        return false;
+    }
+
+    // Всплывающая плашка снизу; с кнопкой действия (например «Отменить»)
+    private void snack(String msg, String action, final Runnable onAction) {
+        if (appRoot == null || shell == null || dialogShowing() || (lockView != null && lockView.getVisibility() == View.VISIBLE)) {
+            Toast.makeText(this, msg, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (snackView != null) appRoot.removeView(snackView);
+        final LinearLayout sb = new LinearLayout(this);
+        sb.setGravity(Gravity.CENTER_VERTICAL);
+        sb.setPadding(dp(18), dp(12), dp(10), dp(12));
+        sb.setBackground(round(darkTheme ? 0xFF2C2F38 : 0xFF23252C, 18));
+        sb.setElevation(dp(12));
+        TextView m = tv(msg, 14, 0xFFFFFFFF, false);
+        m.setMaxLines(3);
+        sb.addView(m, new LinearLayout.LayoutParams(0, -2, 1));
+        if (action != null && onAction != null) {
+            TextView a = tv(action, 14, ACCENT, true);
+            a.setPadding(dp(14), dp(6), dp(10), dp(6));
+            a.setOnClickListener(v -> { buzz(v, HapticFeedbackConstants.KEYBOARD_TAP); hideSnack(sb); onAction.run(); });
+            sb.addView(a, new LinearLayout.LayoutParams(-2, -2));
+        }
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM);
+        lp.setMargins(dp(12), 0, dp(12), shell.getPaddingBottom() + dp(74));
+        appRoot.addView(sb, lp);
+        snackView = sb;
+        sb.setAlpha(0f);
+        sb.setTranslationY(dp(40));
+        sb.animate().alpha(1f).translationY(0f).setDuration(260).setInterpolator(new DecelerateInterpolator(2f)).start();
+        final int my = ++snackToken;
+        ui.postDelayed(() -> { if (my == snackToken) hideSnack(sb); }, action != null ? 4500 : 2600);
+    }
+
+    private void hideSnack(final View sb) {
+        if (sb == null || sb.getParent() == null) return;
+        sb.animate().alpha(0f).translationY(dp(30)).setDuration(180).withEndAction(() -> {
+            if (appRoot != null) appRoot.removeView(sb);
+            if (snackView == sb) snackView = null;
+        }).start();
+    }
+
+    private void trashUndo(final ArrayList<Library.Item> targets) {
+        snack(tf("moved_trash", targets.size()), t("undo"), () -> {
+            for (Library.Item it : targets) lib.restore(it);
+            lib.save();
+            animGrid = true;
+            refreshAll();
+        });
+    }
     private int dp(int n) { return (int) (n * getResources().getDisplayMetrics().density + .5f); }
     private LinearLayout.LayoutParams params(int w, int h) { return new LinearLayout.LayoutParams(w < 0 ? w : dp(w), h < 0 ? h : dp(h)); }
 
@@ -474,7 +586,20 @@ public class MainActivity extends Activity {
     private String popId = null;
 
     // Лёгкое «нажатие»: кнопка слегка уменьшается и пружинит обратно
+    private void buzz(View v, int kind) {
+        try { if (v != null) v.performHapticFeedback(kind); } catch (Throwable ignored) { }
+    }
+
+    // Ripple-волна поверх кнопки (форма берётся из фона)
+    private void addRipple(View v) {
+        if (v.getForeground() != null) return;
+        Drawable bg = v.getBackground();
+        Drawable mask = bg != null && bg.getConstantState() != null ? bg.getConstantState().newDrawable().mutate() : null;
+        v.setForeground(new RippleDrawable(ColorStateList.valueOf((FG & 0x00FFFFFF) | 0x2E000000), null, mask));
+    }
+
     private void pressFx(View v) {
+        try { addRipple(v); } catch (Throwable ignored) { }
         v.setOnTouchListener((x, e) -> {
             int a = e.getActionMasked();
             if (a == MotionEvent.ACTION_DOWN) x.animate().scaleX(0.95f).scaleY(0.95f).setDuration(90).start();
@@ -769,7 +894,6 @@ public class MainActivity extends Activity {
         }
         shell.addView(body, new LinearLayout.LayoutParams(-1, 0, 1));
         LinearLayout bar = new LinearLayout(this);
-        bar.setBackgroundColor(hasBg() ? ((PANEL & 0x00FFFFFF) | 0xD0000000) : PANEL);
         String[] names = {t("tab_feed"), t("tab_albums"), t("tab_upload"), t("tab_settings")};
         for (int i = 0; i < 4; i++) {
             final int k = i;
@@ -779,14 +903,25 @@ public class MainActivity extends Activity {
             b.setScaleType(ImageView.ScaleType.FIT_CENTER);
             b.setPadding(dp(18), dp(7), dp(18), dp(7));
             b.setContentDescription(names[i]);
-            cellT.setOnClickListener(v -> showTab(k));
+            cellT.setOnClickListener(v -> { buzz(v, HapticFeedbackConstants.KEYBOARD_TAP); if (curTab == k) scrollTop(k); else showTab(k); });
             pressFx(b);
             b.setClickable(false);
             tabBtns[i] = b;
             cellT.addView(b, new FrameLayout.LayoutParams(dp(68), dp(40), Gravity.CENTER));
             bar.addView(cellT, new LinearLayout.LayoutParams(0, -1, 1));
         }
-        shell.addView(bar, new LinearLayout.LayoutParams(-1, dp(58)));
+        FrameLayout barWrap = new FrameLayout(this);
+        GradientDrawable nbg = new GradientDrawable();
+        nbg.setColor(hasBg() ? ((PANEL & 0x00FFFFFF) | 0xE0000000) : PANEL);
+        float nr = dp(24);
+        nbg.setCornerRadii(new float[]{nr, nr, nr, nr, 0, 0, 0, 0});
+        barWrap.setBackground(nbg);
+        barWrap.setElevation(dp(10));
+        navInd = new View(this);
+        navInd.setBackground(round(blend(PANEL, ACCENT, 0.24f), 20));
+        barWrap.addView(navInd, new FrameLayout.LayoutParams(dp(68), dp(40), Gravity.LEFT | Gravity.CENTER_VERTICAL));
+        barWrap.addView(bar, new FrameLayout.LayoutParams(-1, -1));
+        shell.addView(barWrap, new LinearLayout.LayoutParams(-1, dp(62)));
         appRoot = new FrameLayout(this);
         appRoot.setBackgroundColor(BG);
         bgView = new ImageView(this);
@@ -800,6 +935,25 @@ public class MainActivity extends Activity {
         appRoot.addView(lockView, new FrameLayout.LayoutParams(-1, -1));
         setContentView(appRoot);
         showTab(startTab >= 0 && startTab < 4 ? startTab : (lib.active().isEmpty() ? 2 : 0));
+    }
+
+    private View navInd;
+
+    private void moveNavInd(boolean anim) {
+        if (navInd == null) return;
+        final View wrap = (View) navInd.getParent();
+        int w = wrap.getWidth();
+        if (w == 0) { wrap.post(() -> moveNavInd(false)); return; }
+        int pos = wrap.getLayoutDirection() == View.LAYOUT_DIRECTION_RTL ? 3 - curTab : curTab;
+        float x = w / 4f * pos + w / 8f - dp(34);
+        navInd.animate().cancel();
+        if (anim) navInd.animate().translationX(x).setDuration(360).setInterpolator(new OvershootInterpolator(1.3f)).start();
+        else navInd.setTranslationX(x);
+    }
+
+    private void scrollTop(int tab) {
+        View v = tab == 0 ? feedScroll : tab == 1 ? (albumOpen != null ? albumDetailScroll : albumListScroll) : tabViews[tab];
+        if (v instanceof ScrollView) ((ScrollView) v).smoothScrollTo(0, 0);
     }
 
     private static final int[] NAV_ICONS = {R.drawable.nav_home, R.drawable.nav_gallery, R.drawable.nav_upload, R.drawable.nav_settings};
@@ -842,8 +996,12 @@ public class MainActivity extends Activity {
             tabViews[i].setTranslationX(0f);
             boolean on = i == tab;
             tabBtns[i].setColorFilter(on ? ACCENT : MUTED);
-            tabBtns[i].setBackground(on ? round(blend(PANEL, ACCENT, 0.2f), 20) : null);
-            tabBtns[i].animate().scaleX(on ? 1.08f : 1f).scaleY(on ? 1.08f : 1f).setDuration(200).start();
+            if (on && changed && !first) {
+                final View ib = tabBtns[i];
+                ib.animate().cancel();
+                ib.animate().scaleX(1.22f).scaleY(1.22f).setDuration(110).withEndAction(() ->
+                        ib.animate().scaleX(1.06f).scaleY(1.06f).setDuration(260).setInterpolator(new OvershootInterpolator(3f)).start()).start();
+            } else tabBtns[i].animate().scaleX(on ? 1.06f : 1f).scaleY(on ? 1.06f : 1f).setDuration(200).start();
         }
         if (changed && !first) {
             View v = tabViews[tab];
@@ -856,6 +1014,8 @@ public class MainActivity extends Activity {
                 v.animate().alpha(1f).translationY(0f).setDuration(260).start();
             }
         }
+        moveNavInd(changed && !first);
+        if (changed && !first) buzz(appRoot, HapticFeedbackConstants.KEYBOARD_TAP);
         if (tab == 0) renderFeed(); else if (tab == 1) renderAlbums(); else if (tab == 2) renderUpload(); else renderSettings();
     }
 
@@ -974,7 +1134,14 @@ public class MainActivity extends Activity {
         pool.execute(() -> {
             final Thumb th = makeThumbData(it);
             thumbCache.put(it.path, th);
-            ui.post(() -> { if (it.path.equals(iv.getTag())) applyThumb(it, th, iv, label); });
+            ui.post(() -> {
+                if (!it.path.equals(iv.getTag())) return;
+                applyThumb(it, th, iv, label);
+                iv.setAlpha(0f);
+                iv.setScaleX(1.04f);
+                iv.setScaleY(1.04f);
+                iv.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(260).setInterpolator(new DecelerateInterpolator()).start();
+            });
         });
     }
 
@@ -1105,6 +1272,7 @@ public class MainActivity extends Activity {
                     if (dx > dp(90) && dx > Math.abs(dy) * 2.2f) {
                         tileSwiped = true;
                         track[0] = false;
+                        buzz(x, HapticFeedbackConstants.KEYBOARD_TAP);
                         x.cancelLongPress();
                         x.setPressed(false);
                         quickTags(it);
@@ -1516,10 +1684,15 @@ public class MainActivity extends Activity {
                 if (!selection.remove(it.id)) selection.add(it.id);
                 popId = it.id;
                 onSel.run();
-            } else openViewer(list, idx);
+            } else {
+                Rect zr = new Rect();
+                if (v.getGlobalVisibleRect(zr)) zoomFrom = zr;
+                openViewer(list, idx);
+            }
         });
         if (selection != null) {
             cell.setOnLongClickListener(v -> {
+                buzz(v, HapticFeedbackConstants.LONG_PRESS);
                 if (!selection.isEmpty() && !selection.contains(it.id)) {
                     // диапазон: от последнего выделенного до этого файла
                     String last = null;
@@ -1562,8 +1735,11 @@ public class MainActivity extends Activity {
                 row = new LinearLayout(this);
                 if (anim && i / cols < 8) {
                     row.setAlpha(0f);
-                    row.setTranslationY(dp(22));
-                    row.animate().alpha(1f).translationY(0f).setStartDelay((i / cols) * 45L).setDuration(300).start();
+                    row.setTranslationY(dp(26));
+                    row.setScaleX(0.97f);
+                    row.setScaleY(0.97f);
+                    row.animate().alpha(1f).translationY(0f).scaleX(1f).scaleY(1f).setStartDelay((i / cols) * 40L).setDuration(340)
+                            .setInterpolator(new DecelerateInterpolator(2f)).start();
                 }
                 row.setOrientation(LinearLayout.HORIZONTAL);
                 LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(-1, -2);
@@ -1578,7 +1754,11 @@ public class MainActivity extends Activity {
     }
 
     private TextView emptyNote(String text) {
-        TextView e = tv(text, 14, MUTED, false);
+        SpannableString ss = new SpannableString("✨\n" + text);
+        ss.setSpan(new RelativeSizeSpan(2.6f), 0, 1, 0);
+        TextView e = tv("", 14, MUTED, false);
+        e.setText(ss);
+        e.setLineSpacing(dp(4), 1f);
         e.setGravity(Gravity.CENTER);
         e.setPadding(dp(16), dp(32), dp(16), dp(32));
         e.setBackground(round(PANEL, 14));
@@ -1659,7 +1839,35 @@ public class MainActivity extends Activity {
         feedGrid.setOrientation(LinearLayout.VERTICAL);
         feedGrid.setPadding(dp(12), 0, dp(12), dp(8));
         feedScroll.addView(feedGrid);
-        r.addView(feedScroll, new LinearLayout.LayoutParams(-1, 0, 1));
+        FrameLayout feedWrap = new FrameLayout(this);
+        feedWrap.addView(feedScroll, new FrameLayout.LayoutParams(-1, -1));
+        final TextView upFab = tv("↑", 20, ONACC, true);
+        upFab.setGravity(Gravity.CENTER);
+        GradientDrawable ug = new GradientDrawable();
+        ug.setShape(GradientDrawable.OVAL);
+        ug.setColor(ACCENT);
+        upFab.setBackground(ug);
+        upFab.setElevation(dp(8));
+        upFab.setVisibility(View.GONE);
+        upFab.setOnClickListener(v -> { buzz(v, HapticFeedbackConstants.KEYBOARD_TAP); feedScroll.smoothScrollTo(0, 0); });
+        pressFx(upFab);
+        FrameLayout.LayoutParams ufp = new FrameLayout.LayoutParams(dp(48), dp(48), Gravity.BOTTOM | Gravity.END);
+        ufp.setMargins(0, 0, dp(16), dp(16));
+        feedWrap.addView(upFab, ufp);
+        feedScroll.setOnScrollChangeListener((sv0, sx, sy, osx, osy) -> {
+            boolean show = sy > getResources().getDisplayMetrics().heightPixels;
+            boolean shown = upFab.getVisibility() == View.VISIBLE && upFab.getScaleX() > 0.5f;
+            if (show == shown) return;
+            upFab.animate().cancel();
+            if (show) {
+                upFab.setVisibility(View.VISIBLE);
+                upFab.setScaleX(0f); upFab.setScaleY(0f);
+                upFab.animate().scaleX(1f).scaleY(1f).setDuration(260).setInterpolator(new OvershootInterpolator(2.5f)).start();
+            } else {
+                upFab.animate().scaleX(0f).scaleY(0f).setDuration(160).withEndAction(() -> upFab.setVisibility(View.GONE)).start();
+            }
+        });
+        r.addView(feedWrap, new LinearLayout.LayoutParams(-1, 0, 1));
         feedScroll.addOnLayoutChangeListener((vw, a1, a2, a3, a4, a5, a6, a7, a8) -> {
             if ((a4 - a2) != (a8 - a6) || (a3 - a1) != (a7 - a5)) feedScroll.post(this::renderFeed);
         });
@@ -1697,7 +1905,7 @@ public class MainActivity extends Activity {
                 new Act("🗑", t("del_to_trash"), t("del_to_trash_d"), RED, () -> {
                     for (Library.Item it : targets) lib.moveToTrash(it);
                     lib.save(); feedSel.clear(); refreshAll();
-                    toast(tf("moved_trash", targets.size()));
+                    trashUndo(targets);
                 }));
     }
 
@@ -1808,7 +2016,19 @@ public class MainActivity extends Activity {
         feedInfo.setText(sb.toString());
         feedGrid.removeAllViews();
         if (list.isEmpty()) {
-            feedGrid.addView(emptyNote(lib.active().isEmpty() ? t("empty_all") : t("empty_filter")), params(-1, -2));
+            View en = emptyNote(lib.active().isEmpty() ? t("empty_all") : t("empty_filter"));
+            en.setAlpha(0f);
+            en.setTranslationY(dp(20));
+            en.animate().alpha(1f).translationY(0f).setDuration(360).setInterpolator(new DecelerateInterpolator(2f)).start();
+            feedGrid.addView(en, params(-1, -2));
+            if (lib.active().isEmpty()) {
+                TextView add = primaryButton("＋  " + t("tab_upload"));
+                add.setBackground(round(ACCENT, 24));
+                add.setOnClickListener(v -> showTab(2));
+                LinearLayout.LayoutParams ap0 = params(-1, 50);
+                ap0.topMargin = dp(12);
+                feedGrid.addView(add, ap0);
+            }
             return;
         }
         fillGrid(feedGrid, feedScroll, list, feedSel, this::renderFeed);
@@ -2122,7 +2342,7 @@ public class MainActivity extends Activity {
             acts.add(new Act("🗑", t("del_from_app"), t("del_from_app_d"), RED, () -> {
                 for (Library.Item it : targets) lib.moveToTrash(it);
                 lib.save(); albumSelI.clear(); refreshAll();
-                toast(tf("moved_trash", targets.size()));
+                trashUndo(targets);
             }));
             sheet(tf("sel_n", targets.size()), null, acts.toArray(new Act[0]));
             return;
@@ -2725,7 +2945,7 @@ public class MainActivity extends Activity {
         lib.save();
         sel.clear();
         refreshAll();
-        toast(tf("moved_trash", targets.size()));
+        trashUndo(targets);
     }
 
     private void finishAlbumMove(int n) {
@@ -2939,6 +3159,8 @@ public class MainActivity extends Activity {
         return r.contains((int) e.getRawX(), (int) e.getRawY());
     }
 
+    private Rect zoomFrom = null;
+
     private void openViewer(final ArrayList<Library.Item> list, int start) {
         if (list.isEmpty()) return;
         final int[] idx = {start};
@@ -3023,11 +3245,64 @@ public class MainActivity extends Activity {
                 return true;
             }
         });
+        final View[] dragRefs = new View[2];   // media, root
         final Dialog dialog = new Dialog(this, android.R.style.Theme_Black_NoTitleBar_Fullscreen) {
-            @Override public boolean dispatchTouchEvent(MotionEvent ev) { gd.onTouchEvent(ev); return super.dispatchTouchEvent(ev); }
+            float x0, y0;
+            boolean cand, drag;
+
+            @Override public boolean dispatchTouchEvent(MotionEvent ev) {
+                gd.onTouchEvent(ev);
+                if (dragTouch(ev)) return true;
+                return super.dispatchTouchEvent(ev);
+            }
+
+            // Свайп вниз по фото закрывает просмотр
+            private boolean dragTouch(MotionEvent ev) {
+                View m = dragRefs[0], root = dragRefs[1];
+                if (m == null || root == null) return false;
+                int a = ev.getActionMasked();
+                if (a == MotionEvent.ACTION_DOWN) {
+                    x0 = ev.getRawX(); y0 = ev.getRawY(); drag = false;
+                    cand = !(zoomRef[0] != null && zoomRef[0].isZoomed()) && vsRef[0] == null && !hits(chrome[0], ev) && !hits(chrome[1], ev);
+                    return false;
+                }
+                if (a == MotionEvent.ACTION_POINTER_DOWN) { cand = false; if (!drag) return false; }
+                float dy = ev.getRawY() - y0, dx = ev.getRawX() - x0;
+                float h = Math.max(1, root.getHeight());
+                if (a == MotionEvent.ACTION_MOVE && cand && !drag && dy > dp(26) && dy > Math.abs(dx) * 1.7f) {
+                    drag = true;
+                    MotionEvent c = MotionEvent.obtain(ev);
+                    c.setAction(MotionEvent.ACTION_CANCEL);
+                    super.dispatchTouchEvent(c);
+                    c.recycle();
+                }
+                if (!drag) return false;
+                if (a == MotionEvent.ACTION_MOVE) {
+                    float d = Math.max(0, dy);
+                    float p = Math.min(1f, d / (h * 0.55f));
+                    m.setTranslationY(d);
+                    m.setTranslationX(dx * 0.4f);
+                    m.setScaleX(1f - p * 0.22f);
+                    m.setScaleY(1f - p * 0.22f);
+                    if (root.getBackground() != null) root.getBackground().setAlpha((int) (255 * (1f - p * 0.85f)));
+                    for (View c : chrome) if (c != null) c.setAlpha(Math.max(0f, 1f - p * 3f));
+                } else if (a == MotionEvent.ACTION_UP || a == MotionEvent.ACTION_CANCEL) {
+                    drag = false;
+                    if (dy > dp(130)) {
+                        m.animate().translationY(h).alpha(0f).setDuration(200).withEndAction(this::dismiss).start();
+                    } else {
+                        m.animate().translationY(0f).translationX(0f).scaleX(1f).scaleY(1f).setDuration(280).setInterpolator(new OvershootInterpolator(1.6f)).start();
+                        if (root.getBackground() != null) root.getBackground().setAlpha(255);
+                        for (View c : chrome) if (c != null) c.animate().alpha(1f).setDuration(200).start();
+                    }
+                }
+                return true;
+            }
         };
         final FrameLayout media = new FrameLayout(this);
         final FrameLayout rootF = new FrameLayout(this);
+        dragRefs[0] = media;
+        dragRefs[1] = rootF;
         rootF.setBackgroundColor(0xFF000000);
         rootF.addView(media, new FrameLayout.LayoutParams(-1, -1));
         final TextView flash = tv("", 22, 0xFFFFFFFF, true);
@@ -3203,6 +3478,7 @@ public class MainActivity extends Activity {
             favB.setTextColor(cur.fav ? 0xFFFFD0E0 : 0xFFFFFFFF);
         };
         favB.setOnClickListener(v -> {
+            buzz(v, HapticFeedbackConstants.KEYBOARD_TAP);
             Library.Item cur = list.get(idx[0]);
             cur.fav = !cur.fav;
             lib.save();
@@ -3439,6 +3715,18 @@ public class MainActivity extends Activity {
         openDialogs.add(dialog);
         dialog.show();
         show[0].run();
+        if (zoomFrom != null) {   // фото «вырастает» из плитки
+            final Rect zr = zoomFrom;
+            zoomFrom = null;
+            float sw = getResources().getDisplayMetrics().widthPixels;
+            float sc = Math.max(0.15f, Math.min(1f, zr.width() / sw));
+            media.setPivotX(zr.exactCenterX());
+            media.setPivotY(zr.exactCenterY());
+            media.setScaleX(sc);
+            media.setScaleY(sc);
+            media.animate().scaleX(1f).scaleY(1f).alpha(1f).setDuration(340).setInterpolator(new DecelerateInterpolator(2.2f))
+                    .withEndAction(() -> { media.setPivotX(media.getWidth() / 2f); media.setPivotY(media.getHeight() / 2f); }).start();
+        }
         final Runnable[] tick = new Runnable[1];
         tick[0] = () -> {
             if (!dialog.isShowing()) return;
@@ -3639,9 +3927,16 @@ public class MainActivity extends Activity {
         int shown = Math.max(4, pinBuf.length());
         for (int i = 0; i < shown; i++) sb.append(i < pinBuf.length() ? "●  " : "○  ");
         pinDots.setText(sb.toString().trim());
+        if (pinBuf.length() > 0) {
+            pinDots.animate().cancel();
+            pinDots.setScaleX(1.12f);
+            pinDots.setScaleY(1.12f);
+            pinDots.animate().scaleX(1f).scaleY(1f).setDuration(180).setInterpolator(new OvershootInterpolator(3f)).start();
+        }
     }
 
     private void pinKey(String k) {
+        buzz(lockView, HapticFeedbackConstants.KEYBOARD_TAP);
         if (k.equals("⌫")) {
             if (pinBuf.length() > 0) pinBuf.setLength(pinBuf.length() - 1);
             updateDots();
@@ -3666,6 +3961,7 @@ public class MainActivity extends Activity {
                 pinFails++;
                 if (pinFails >= 5) { pinFails = 0; pinBlockedUntil = now + 30000; pinMsg.setText(tf("pin_blocked", 30)); }
                 else pinMsg.setText(t("pin_wrong"));
+                buzz(lockView, HapticFeedbackConstants.LONG_PRESS);
                 pinDots.animate().cancel();
                 pinDots.setTranslationX(0f);
                 pinDots.animate().translationX(dp(14)).setDuration(60).withEndAction(() ->
@@ -4161,7 +4457,7 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams rsp = params(-1, 48);
         rsp.topMargin = dp(10);
         setBox.addView(rs, rsp);
-        TextView ver = tv("Offline Media Vault · v1.9", 11, MUTED, false);
+        TextView ver = tv("Offline Media Vault · v2.0", 11, MUTED, false);
         ver.setGravity(Gravity.CENTER);
         ver.setPadding(0, dp(18), 0, 0);
         ver.setTag("ver");
