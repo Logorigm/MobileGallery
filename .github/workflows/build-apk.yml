@@ -7,6 +7,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # нужно только для публикации релиза по тегу v*
     steps:
       - uses: actions/checkout@v5
 
@@ -22,15 +24,31 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Build debug APK
+      - name: Build debug and release APK
         run: gradle assembleDebug assembleRelease --stacktrace
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: OfflineMediaVault-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+      - name: Name APKs by version
+        run: |
+          VER=$(sed -n "s/.*versionName '\(.*\)'.*/\1/p" app/build.gradle)
+          mkdir -p out
+          cp app/build/outputs/apk/release/app-release.apk "out/OfflineMediaVault-$VER.apk"
+          cp app/build/outputs/apk/debug/app-debug.apk "out/OfflineMediaVault-$VER-debug.apk"
+          ls -l out
 
       - uses: actions/upload-artifact@v4
         with:
           name: OfflineMediaVault-release-apk
-          path: app/build/outputs/apk/release/app-release.apk
+          path: out/OfflineMediaVault-*[0-9].apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OfflineMediaVault-debug-apk
+          path: out/OfflineMediaVault-*-debug.apk
+
+      # git tag v3.0 && git push origin v3.0 → страница Releases с готовым APK
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: out/*.apk
+          generate_release_notes: true

@@ -590,7 +590,10 @@ public class MainActivity extends Activity {
 
     @Override protected void onStart() {
         super.onStart();
-        if (skipLock) { skipLock = false; bgSince = 0; return; }
+        if (skipLock) {   // возврат из выбора файлов / «Поделиться»: PIN не спрашиваем, если отлучка была недолгой
+            skipLock = false;
+            if (bgSince == 0 || System.currentTimeMillis() - bgSince < 10 * 60_000L) { bgSince = 0; return; }
+        }
         if (lockView != null && lockView.getVisibility() != View.VISIBLE && lockDue()) showLock();
         bgSince = 0;
     }
@@ -1629,7 +1632,9 @@ public class MainActivity extends Activity {
         if (b == null) return;
         File tmp = new File(f.getPath() + ".tmp");
         try (OutputStream os = new FileOutputStream(tmp)) {
-            b.compress(Bitmap.CompressFormat.JPEG, 84, os);
+            // прозрачные PNG / GIF / WebP — без потерь, чтобы фон не стал чёрным
+            if (b.hasAlpha()) b.compress(Bitmap.CompressFormat.PNG, 100, os);
+            else b.compress(Bitmap.CompressFormat.JPEG, 84, os);
         } catch (Throwable e) {
             tmp.delete();
             return;
@@ -1715,6 +1720,7 @@ public class MainActivity extends Activity {
                     int h = Math.max(1, (int) ((long) w * p.getHeight() / Math.max(1, p.getWidth())));
                     Bitmap bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
                     bmp.eraseColor(0xFFFFFFFF);
+                    bmp.setHasAlpha(false);   // страница непрозрачная — миниатюра сохранится в JPEG
                     p.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);
                     p.close();
                     th.bmp = bmp;
@@ -5348,7 +5354,11 @@ public class MainActivity extends Activity {
                     chromeOn[0] = true;
                     setChrome[0].run();
                 });
-                vv.setOnErrorListener((mp, w, e) -> { toast(t("unsupported")); return true; });
+                vv.setOnErrorListener((mp, w, e) -> {
+                    toast(t("unsupported"));
+                    if (slide[0] && my == token[0]) ui.postDelayed(slideNext[0], 1500);   // слайд-шоу не застревает на битом видео
+                    return true;
+                });
                 vv.setVideoPath(f.getAbsolutePath());
                 playB.setText("▶");
             } else if (Library.isPdf(it.name)) {
