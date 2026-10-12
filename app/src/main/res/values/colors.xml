@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="icon_bg_1">#13111F</color>
+    <color name="icon_bg_2">#0F1A32</color>
+    <color name="icon_bg_3">#22150E</color>
+    <color name="icon_bg_4">#425833</color>
+    <color name="icon_bg_5">#112D2F</color>
+    <color name="icon_bg_6">#405680</color>
+    <color name="icon_bg_7">#BE3552</color>
+    <color name="icon_bg_8">#739E6A</color>
+    <color name="icon_bg_9">#2E1537</color>
+    <color name="icon_bg_10">#CB8895</color>
+    <color name="icon_bg_11">#4A3927</color>
+    <color name="icon_bg_12">#95A29F</color>
+    <color name="icon_bg_13">#F17D72</color>
+    <color name="icon_bg_14">#174825</color>
+    <color name="icon_bg_15">#7FB6C9</color>
+</resources>
