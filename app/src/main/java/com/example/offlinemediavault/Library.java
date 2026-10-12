@@ -65,6 +65,27 @@ final class Library {
     }
 
     static final String FAV = "__fav__";   // виртуальный альбом «Избранное»
+    // Умные подборки (как «Типы медиафайлов» в Фото на iPhone): собираются сами
+    static final String V_VIDEO = "__video__", V_PHOTO = "__photo__", V_GIF = "__gif__", V_PDF = "__pdf__",
+            V_UNTAGGED = "__untagged__", V_RECENT = "__recent__", V_ENC = "__enc__";
+
+    static boolean isVirtual(String id) { return id != null && id.startsWith("__") && id.endsWith("__"); }
+
+    static boolean isGif(String n) { return n.toLowerCase(Locale.ROOT).endsWith(".gif"); }
+
+    private static boolean inSmart(Item it, String id, long now) {
+        switch (id) {
+            case FAV: return it.fav;
+            case V_VIDEO: return isVideo(it.name);
+            case V_PHOTO: return isImage(it.name) && !isGif(it.name);
+            case V_GIF: return isGif(it.name);
+            case V_PDF: return isPdf(it.name);
+            case V_UNTAGGED: return parseTags(it.tags).isEmpty();
+            case V_RECENT: return now - it.added < 30L * 86400000L;
+            case V_ENC: return it.enc;
+            default: return false;
+        }
+    }
 
     static class Album {
         String id = "", name = "";
@@ -408,8 +429,9 @@ final class Library {
 
     synchronized ArrayList<Item> inAlbum(String albumId) {
         ArrayList<Item> out = new ArrayList<>();
-        if (FAV.equals(albumId)) {
-            for (Item it : items) if (!it.trashed && it.fav) out.add(it);
+        if (isVirtual(albumId)) {
+            long now = System.currentTimeMillis();
+            for (Item it : items) if (!it.trashed && inSmart(it, albumId, now)) out.add(it);
             Collections.sort(out, (x, y) -> Long.compare(y.added, x.added));
             return out;
         }
