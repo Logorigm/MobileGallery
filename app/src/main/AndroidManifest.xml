@@ -1,5 +1,13 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- отпечаток пальца / лицо для разблокировки (по желанию, в настройках) -->
+    <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+    <uses-permission android:name="android.permission.USE_FINGERPRINT" android:maxSdkVersion="28" />
+    <!-- «Сохранить в галерею» на Android 9 и старше; на Android 10+ разрешение не нужно -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
+    <!-- приложение полностью оффлайн: доступ в интернет запрещён даже для библиотек -->
+    <uses-permission android:name="android.permission.INTERNET" tools:node="remove" />
     <application
         android:allowBackup="false"
         android:supportsRtl="true"
@@ -7,7 +15,23 @@
         android:label="Offline Media Vault"
         android:theme="@android:style/Theme.Material.NoActionBar"
         android:usesCleartextTraffic="false">
-        <activity android:name=".MainActivity" android:exported="true" />
+        <activity android:name=".MainActivity" android:exported="true">
+            <!-- «Поделиться» → Offline Media Vault из галереи, браузера, мессенджеров -->
+            <intent-filter android:label="@string/share_label">
+                <action android:name="android.intent.action.SEND" />
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="image/*" />
+                <data android:mimeType="video/*" />
+                <data android:mimeType="application/pdf" />
+                <data android:mimeType="application/zip" />
+            </intent-filter>
+        </activity>
+        <provider
+            android:name=".ShareProvider"
+            android:authorities="${applicationId}.share"
+            android:exported="false"
+            android:grantUriPermissions="true" />
         <activity-alias
             android:name=".Icon1"
             android:targetActivity=".MainActivity"

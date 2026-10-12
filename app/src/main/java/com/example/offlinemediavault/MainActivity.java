@@ -160,6 +160,12 @@ public class MainActivity extends Activity {
             case "🎲": return R.drawable.ic_shuffle;
             case "↗": return R.drawable.ic_remove;
             case "🖼": return R.drawable.ic_photo;
+            case "⤴": return R.drawable.ic_share;
+            case "⤓": return R.drawable.ic_download;
+            case "▷": return R.drawable.ic_slideshow;
+            case "◉": return R.drawable.ic_fingerprint;
+            case "🗜": return R.drawable.ic_archive;
+            case "≡": return R.drawable.ic_drag_handle;
             default: return 0;
         }
     }
@@ -364,7 +370,7 @@ public class MainActivity extends Activity {
     private boolean showNames = true;
 
     private static boolean authed = false;
-    private static long leftAt = 0;
+    private static long bgSince = 0;   // когда приложение ушло в фон (0 — на экране)
     private boolean skipLock = false;
 
     private static final int PICK_MEDIA = 101, PICK_ZIP = 102, PICK_PDF = 103, EXPORT_ZIP = 104, PICK_BG = 105, PICK_ICON = 106;
@@ -440,11 +446,14 @@ public class MainActivity extends Activity {
             String act0 = in0 == null ? null : in0.getAction();
             if ("com.example.offlinemediavault.UPLOAD".equals(act0)) { startTab = 2; pendingPick = true; }
             else if ("com.example.offlinemediavault.FAVORITES".equals(act0)) { startTab = 1; albumOpen = Library.FAV; }
+            takeShared(in0);
+            if (!pendingShare.isEmpty()) startTab = 0;
+            cleanShareDir();
         }
         installCrashHook();
         buildAll();
         applyTaskDesc();
-        if (hasPin() && !authed) showLock();
+        if (lockDue()) showLock();
         else {
             if (b == null) {
                 shell.setAlpha(0f);
@@ -452,6 +461,7 @@ public class MainActivity extends Activity {
                 shell.animate().alpha(1f).translationY(0f).setDuration(420).setInterpolator(new DecelerateInterpolator(2f)).start();
             }
             if (pendingPick) { pendingPick = false; ui.post(this::pickMedia); }
+            if (!pendingShare.isEmpty()) ui.postDelayed(this::runPendingShare, 250);
         }
         ui.postDelayed(this::checkCrash, 700);
     }
@@ -501,17 +511,26 @@ public class MainActivity extends Activity {
     private boolean pendingPick = false;
     private static boolean decoy = false;   // открыт «ложный» (пустой) архив по запасному PIN
 
+    // Одна библиотека на процесс: окно, открытое через «Поделиться», и основное окно видят одни и те же данные
+    private static Library realLib, decoyLib;
+
     private Library openLib() {
         if (decoy) {
-            File dd = new File(getFilesDir(), "decoy");
-            dd.mkdirs();
-            Library l = new Library(dd);
-            l.load(null);
-            return l;
+            if (decoyLib == null) {
+                File dd = new File(getFilesDir(), "decoy");
+                dd.mkdirs();
+                Library l = new Library(dd);
+                l.load(null);
+                decoyLib = l;
+            }
+            return decoyLib;
         }
-        Library l = new Library(getFilesDir());
-        l.load(getSharedPreferences("library", 0).getString("items", null));
-        return l;
+        if (realLib == null) {
+            Library l = new Library(getFilesDir());
+            l.load(getSharedPreferences("library", 0).getString("items", null));
+            realLib = l;
+        }
+        return realLib;
     }
 
     private void switchVault(boolean fake) {
@@ -546,11 +565,6 @@ public class MainActivity extends Activity {
         if (prefs != null && prefs.getBoolean("hide_recents", false)) setSecure(true);
     }
 
-    @Override protected void onResume() {
-        super.onResume();
-        if (prefs != null) applySecure();
-    }
-
     @Override protected void onSaveInstanceState(Bundle out) {
         super.onSaveInstanceState(out);
         out.putInt("tab", curTab);
@@ -559,13 +573,35 @@ public class MainActivity extends Activity {
 
     @Override protected void onStop() {
         super.onStop();
-        leftAt = System.currentTimeMillis();
+        if (!isChangingConfigurations()) bgSince = System.currentTimeMillis();
     }
 
     @Override protected void onStart() {
         super.onStart();
-        if (skipLock) { skipLock = false; return; }
-        if (hasPin() && authed && lockView != null && System.currentTimeMillis() - leftAt > 30000) showLock();
+        if (skipLock) { skipLock = false; bgSince = 0; return; }
+        if (lockView != null && lockView.getVisibility() != View.VISIBLE && lockDue()) showLock();
+        bgSince = 0;
+    }
+
+    private int seenRev = -1;
+
+    @Override protected void onResume() {
+        super.onResume();
+        if (prefs != null) applySecure();
+        // данные могли измениться в другом окне приложения (например, открытом через «Поделиться»)
+        if (lib != null && seenRev != lib.rev) {
+            if (seenRev >= 0) refreshAll();
+            seenRev = lib.rev;
+        }
+    }
+
+    // Через сколько секунд в фоне приложение снова просит PIN (0 — сразу)
+    private long lockAfterMs() { return prefs.getInt("lock_after", 30) * 1000L; }
+
+    private boolean lockDue() {
+        if (!hasPin()) return false;
+        if (!authed) return true;
+        return bgSince > 0 && System.currentTimeMillis() - bgSince >= lockAfterMs();
     }
 
     @Override protected void onDestroy() {
@@ -2678,6 +2714,15 @@ public class MainActivity extends Activity {
         }
     }
 
+    // Круглая иконка-кнопка для панелей выбора
+    private TextView selIcon(String glyph, int bg, int fg) {
+        TextView b = tv(glyph, 18, fg, true);
+        b.setGravity(Gravity.CENTER);
+        b.setBackground(round(bg, 20));
+        pressFx(b);
+        return b;
+    }
+
     private TextView emptyNote(String text) {
         TextView e = tv(text, 14, MUTED, false);
         e.setLineSpacing(dp(3), 1f);
@@ -2714,28 +2759,33 @@ public class MainActivity extends Activity {
         fsCancel.setGravity(Gravity.CENTER);
         fsCancel.setOnClickListener(v -> { feedSel.clear(); renderFeed(); });
         feedSelBar.addView(fsCancel, new LinearLayout.LayoutParams(dp(44), dp(44)));
-        feedSelCount = tv("", 17, FG, true);
-        feedSelCount.setPadding(dp(8), 0, dp(8), 0);
+        feedSelCount = tv("", 20, FG, true);
+        feedSelCount.setSingleLine(true);
+        feedSelCount.setPadding(dp(8), 0, dp(4), 0);
         feedSelBar.addView(feedSelCount, new LinearLayout.LayoutParams(0, -2, 1));
-        TextView fsAll = button(t("sel_all"));
-        fsAll.setBackground(round(BTN, 20));
-        fsAll.setOnClickListener(v -> { for (Library.Item it : filtered()) feedSel.add(it.id); renderFeed(); });
-        feedSelBar.addView(fsAll, new LinearLayout.LayoutParams(-2, dp(40)));
-        TextView fsFav = tv("♥", 18, 0xFFFFFFFF, true);
-        fsFav.setGravity(Gravity.CENTER);
-        fsFav.setBackground(round(0xFFE8527E, 20));
+        TextView fsAll = selIcon("☑", BTN, FG);
+        fsAll.setContentDescription(t("sel_all"));
+        fsAll.setOnClickListener(v -> {
+            ArrayList<Library.Item> f = filtered();
+            boolean all = feedSel.size() >= f.size();
+            if (all) feedSel.clear(); else for (Library.Item it : f) feedSel.add(it.id);
+            renderFeed();
+        });
+        TextView fsFav = selIcon("♥", 0xFFE8527E, 0xFFFFFFFF);
+        fsFav.setContentDescription(t("favorites"));
         fsFav.setOnClickListener(v -> toggleFav(selectedFeed()));
-        TextView fsAlbum = tv("▣", 18, ONACC, true);
-        fsAlbum.setGravity(Gravity.CENTER);
-        fsAlbum.setBackground(accentBg(20));
-        fsAlbum.setOnClickListener(v -> chooseAlbum(selectedFeed()));
-        TextView fsDel = tv("🗑", 18, 0xFFFFFFFF, true);
-        fsDel.setGravity(Gravity.CENTER);
-        fsDel.setBackground(round(RED, 20));
+        TextView fsShare = selIcon("⤴", ACCENT, ONACC);
+        fsShare.setContentDescription(t("share"));
+        fsShare.setOnClickListener(v -> shareItems(selectedFeed()));
+        TextView fsMore = selIcon("⋯", BTN, FG);
+        fsMore.setContentDescription(t("more"));
+        fsMore.setOnClickListener(v -> moreActions(selectedFeed(), () -> { feedSel.clear(); renderFeed(); }));
+        TextView fsDel = selIcon("🗑", RED, 0xFFFFFFFF);
+        fsDel.setContentDescription(t("delete"));
         fsDel.setOnClickListener(v -> feedTrashAsk());
-        for (TextView b : new TextView[]{fsFav, fsAlbum, fsDel}) {
-            LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(dp(48), dp(40));
-            bp.setMarginStart(dp(8));
+        for (TextView b : new TextView[]{fsAll, fsFav, fsShare, fsMore, fsDel}) {
+            LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(dp(42), dp(40));
+            bp.setMarginStart(dp(6));
             feedSelBar.addView(b, bp);
         }
         feedSelBar.setVisibility(View.GONE);
@@ -2915,7 +2965,7 @@ public class MainActivity extends Activity {
         boolean fmode = !feedSel.isEmpty();
         feedHead.setVisibility(fmode ? View.GONE : View.VISIBLE);
         fadeVis(feedSelBar, fmode);
-        feedSelCount.setText(tf("sel_n", feedSel.size()));
+        feedSelCount.setText(String.valueOf(feedSel.size()));
         int active = incTags.size() + excTags.size() + (sortMode == 0 ? 0 : 1) + (favOnly ? 1 : 0);
         filterBtn.setText(active > 0 ? t("filter") + " · " + active : t("filter"));
         filterBtn.setTextColor(active > 0 ? ONACC : FG);
@@ -2946,7 +2996,7 @@ public class MainActivity extends Activity {
         }
         final boolean anim = animGrid;
         animGrid = false;
-        feedGridV.setData(list, feedSel, this::renderFeed, () -> feedSelCount.setText(tf("sel_n", feedSel.size())), sortMode != 2 && prefs.getBoolean("day_heads", true), anim);
+        feedGridV.setData(list, feedSel, this::renderFeed, () -> feedSelCount.setText(String.valueOf(feedSel.size())), sortMode != 2 && prefs.getBoolean("day_heads", true), anim);
         if (list.size() >= 6 && !prefs.getBoolean("hint_pinch", false)) {   // подсказка о жестах — один раз
             prefs.edit().putBoolean("hint_pinch", true).apply();
             ui.postDelayed(() -> { if (curTab == 0 && !isFinishing()) snack(t("pinch_hint"), null, null); }, 1200);
@@ -3251,6 +3301,9 @@ public class MainActivity extends Activity {
                 acts.add(new Act(af ? "♡" : "♥", af ? t("rm_from_fav") : t("add_to_fav"), null, 0, () -> toggleFav(targets)));
             }
             acts.add(new Act("＋", t("pick_album"), t("pick_album_d"), 0, () -> chooseAlbum(targets)));
+            acts.add(new Act("⤴", t("share"), t("share_d"), 0, () -> shareItems(targets)));
+            acts.add(new Act("⤓", t("save_device"), t("save_device_d"), 0, () -> saveToDevice(targets)));
+            acts.add(new Act("🏷", t("act_tags"), t("tags_bulk_d"), 0, () -> bulkTags(targets, null)));
             acts.add(new Act("🗑", t("del_from_app"), t("del_from_app_d"), RED, () -> {
                 for (Library.Item it : targets) lib.moveToTrash(it);
                 lib.save(); albumSelI.clear(); refreshAll();
@@ -3640,12 +3693,25 @@ public class MainActivity extends Activity {
         cancelSel.setGravity(Gravity.CENTER);
         cancelSel.setOnClickListener(v -> { sel.clear(); renderUpload(); });
         selBar.addView(cancelSel, new LinearLayout.LayoutParams(dp(44), dp(44)));
-        selCount = tv("", 17, FG, true);
+        selCount = tv("", 20, FG, true);
+        selCount.setSingleLine(true);
         selCount.setPadding(dp(8), 0, dp(8), 0);
         selBar.addView(selCount, new LinearLayout.LayoutParams(0, -2, 1));
         TextView selAll = button(t("sel_all"));
+        selAll.setPadding(dp(12), 0, dp(12), 0);
         selAll.setOnClickListener(v -> { for (Library.Item it : uploadList()) sel.add(it.id); renderUpload(); });
         selBar.addView(selAll, new LinearLayout.LayoutParams(-2, dp(40)));
+        TextView upShare = selIcon("⤴", ACCENT, ONACC);
+        upShare.setContentDescription(t("share"));
+        upShare.setOnClickListener(v -> shareItems(selectedItems()));
+        TextView upMore = selIcon("⋯", BTN, FG);
+        upMore.setContentDescription(t("more"));
+        upMore.setOnClickListener(v -> moreActions(selectedItems(), () -> { sel.clear(); renderUpload(); }));
+        for (TextView b : new TextView[]{upShare, upMore}) {
+            LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(dp(42), dp(40));
+            bp.setMarginStart(dp(6));
+            selBar.addView(b, bp);
+        }
         selBar.setVisibility(View.GONE);
         r.addView(selBar, new LinearLayout.LayoutParams(-1, -2));
 
@@ -3790,7 +3856,7 @@ public class MainActivity extends Activity {
         upButtons.setVisibility(mode ? View.GONE : View.VISIBLE);
         fadeVis(selBar, mode);
         fadeVis(selActions, mode);
-        selCount.setText(tf("sel_n", sel.size()));
+        selCount.setText(String.valueOf(sel.size()));
         int tc = lib.trashCount();
         trashBtn.setText(t("trash") + (tc > 0 ? " (" + tc + ")" : ""));
         upItems.clear();
@@ -4013,8 +4079,9 @@ public class MainActivity extends Activity {
                 }));
     }
 
-    private void bulkTags() {
-        final ArrayList<Library.Item> targets = selectedItems();
+    private void bulkTags() { bulkTags(selectedItems(), null); }
+
+    private void bulkTags(final ArrayList<Library.Item> targets, final Runnable done) {
         if (targets.isEmpty()) return;
         final EditText input = tagInput("");
         LinearLayout box = tagBox(input);
@@ -4023,12 +4090,14 @@ public class MainActivity extends Activity {
                 .setNeutralButton(t("tags_replace"), (d, w) -> {
                     String s = Library.joinTags(Library.parseTags(input.getText().toString()));
                     for (Library.Item it : targets) it.tags = s;
-                    lib.save(); sel.clear(); refreshAll();
+                    lib.save(); sel.clear(); feedSel.clear(); albumSelI.clear(); refreshAll();
+                    if (done != null) done.run();
                 })
                 .setPositiveButton(t("tags_add"), (d, w) -> {
                     String s = input.getText().toString();
                     for (Library.Item it : targets) it.tags = Library.mergeTags(it.tags, s);
-                    lib.save(); sel.clear(); refreshAll();
+                    lib.save(); sel.clear(); feedSel.clear(); albumSelI.clear(); refreshAll();
+                    if (done != null) done.run();
                 }));
     }
 
@@ -4334,6 +4403,8 @@ public class MainActivity extends Activity {
         final HashMap<String, Bitmap> pc = new HashMap<>();   // кадры текущего и соседних файлов
         final View[] vr = new View[9];   // 0 media, 1 root, 2 top, 3 bottom, 4 info, 5 prev, 6 next, 7 flash, 8 play
         final PdfHolder pdf = new PdfHolder();
+        final boolean[] slide = {false};   // слайд-шоу
+        final Runnable[] stopSlide = new Runnable[1], slideNext = new Runnable[1], armSlide = new Runnable[1];
 
         final GestureDetector gd = new GestureDetector(this, new GestureDetector.SimpleOnGestureListener() {
             // В манге по страницам свайп листает страницы
@@ -4388,6 +4459,7 @@ public class MainActivity extends Activity {
             VelocityTracker vt;
 
             @Override public boolean dispatchTouchEvent(MotionEvent ev) {
+                if (slide[0] && ev.getActionMasked() == MotionEvent.ACTION_DOWN && stopSlide[0] != null) stopSlide[0].run();
                 gd.onTouchEvent(ev);
                 if (drag(ev)) return true;
                 return super.dispatchTouchEvent(ev);
@@ -4599,11 +4671,15 @@ public class MainActivity extends Activity {
         bottom.addView(pdfBar, new LinearLayout.LayoutParams(-1, -2));
 
         LinearLayout acts = new LinearLayout(this);
+        LinearLayout shareA = vAction("⤴", t("share"));
         final LinearLayout rotA = vAction("↻", t("v_rotate"));
         LinearLayout tagA = vAction("🏷", t("act_tags"));
+        LinearLayout slideA = vAction("▷", t("slideshow"));
         LinearLayout infoA = vAction("ⓘ", t("v_info"));
-        acts.addView(rotA, new LinearLayout.LayoutParams(0, -2, 1));
+        acts.addView(shareA, new LinearLayout.LayoutParams(0, -2, 1));
         acts.addView(tagA, new LinearLayout.LayoutParams(0, -2, 1));
+        acts.addView(rotA, new LinearLayout.LayoutParams(0, -2, 1));
+        acts.addView(slideA, new LinearLayout.LayoutParams(0, -2, 1));
         acts.addView(infoA, new LinearLayout.LayoutParams(0, -2, 1));
         bottom.addView(acts, new LinearLayout.LayoutParams(-1, -2));
         rootF.addView(bottom, new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM));
@@ -4815,6 +4891,41 @@ public class MainActivity extends Activity {
         });
         tagA.setOnClickListener(v -> editTags(list.get(idx[0]), () -> { if (infoOn[0]) fillInfo[0].run(); }));
         infoA.setOnClickListener(v -> openInfo[0].run());
+        shareA.setOnClickListener(v -> {
+            ArrayList<Library.Item> one = new ArrayList<>();
+            one.add(list.get(idx[0]));
+            shareItems(one);
+        });
+
+        // ----- слайд-шоу: фото сменяются каждые 4 с, видео — по окончании; любое касание останавливает
+        slideNext[0] = () -> {
+            if (!slide[0] || !dialog.isShowing() || infoOn[0]) return;
+            if (list.size() < 2) { stopSlide[0].run(); return; }
+            if (idx[0] < list.size() - 1) settle[0].on(1);
+            else { idx[0] = 0; show[0].run(); }
+        };
+        armSlide[0] = () -> {
+            ui.removeCallbacks(slideNext[0]);
+            if (slide[0] && !videoMode[0]) ui.postDelayed(slideNext[0], 4000);
+        };
+        stopSlide[0] = () -> {
+            if (!slide[0]) return;
+            slide[0] = false;
+            ui.removeCallbacks(slideNext[0]);
+            Window sw = dialog.getWindow();
+            if (sw != null) sw.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+            toast(t("slide_off"));
+        };
+        slideA.setOnClickListener(v -> {
+            if (list.size() < 2) { toast(t("slide_need")); return; }
+            slide[0] = true;
+            Window sw = dialog.getWindow();
+            if (sw != null) sw.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+            chromeOn[0] = false;
+            setChrome[0].run();
+            toast(t("slide_on"));
+            armSlide[0].run();
+        });
 
         fillInfo[0] = () -> {
             infoBox.removeAllViews();
@@ -4918,6 +5029,27 @@ public class MainActivity extends Activity {
             });
             afl.addView(addA);
             infoBox.addView(afl, new LinearLayout.LayoutParams(-1, -2));
+
+            Flow xfl = new Flow(this, dp(8), dp(8));
+            TextView saveB = vChip(t("save_device"));
+            startIcon(saveB, R.drawable.ic_download, 0xFFFFFFFF);
+            saveB.setOnClickListener(v -> {
+                ArrayList<Library.Item> one = new ArrayList<>();
+                one.add(it);
+                saveToDevice(one);
+            });
+            xfl.addView(saveB);
+            TextView shB = vChip(t("share"));
+            startIcon(shB, R.drawable.ic_share, 0xFFFFFFFF);
+            shB.setOnClickListener(v -> {
+                ArrayList<Library.Item> one = new ArrayList<>();
+                one.add(it);
+                shareItems(one);
+            });
+            xfl.addView(shB);
+            LinearLayout.LayoutParams xlp = new LinearLayout.LayoutParams(-1, -2);
+            xlp.topMargin = dp(20);
+            infoBox.addView(xfl, xlp);
             fxTree(infoBox);
         };
 
@@ -5084,11 +5216,12 @@ public class MainActivity extends Activity {
                     int d = vv.getDuration();
                     seek.setMax(Math.max(1, d));
                     durT.setText(fmtDur(d));
-                    if (resume > 0) vv.seekTo(resume);
+                    if (resume > 0 && !slide[0]) vv.seekTo(resume);
                     vv.start();
                     applySpeed.run();
                     playB.setText("⏸");
                     armHide[0].run();
+                    if (slide[0]) { chromeOn[0] = false; setChrome[0].run(); }
                 });
                 vv.setOnInfoListener((mp, what, extra) -> {
                     if (what == MediaPlayer.MEDIA_INFO_VIDEO_RENDERING_START)
@@ -5098,6 +5231,7 @@ public class MainActivity extends Activity {
                 vv.setOnCompletionListener(mp -> {
                     prefs.edit().remove("vp_" + it.id).apply();
                     playB.setText("▶");
+                    if (slide[0] && my == token[0]) { slideNext[0].run(); return; }
                     chromeOn[0] = true;
                     setChrome[0].run();
                 });
@@ -5159,12 +5293,15 @@ public class MainActivity extends Activity {
                 });
             }
             setChrome[0].run();
+            armSlide[0].run();
         };
 
         dialog.setContentView(rootF);
         animWin(dialog, R.style.OmvFadeAnim);
         fxTree(rootF);
         dialog.setOnDismissListener(d -> {
+            slide[0] = false;
+            ui.removeCallbacks(slideNext[0]);
             saveVp[0].run();
             stopMedia(media);
             closePdf(pdf);
@@ -5328,7 +5465,7 @@ public class MainActivity extends Activity {
         new java.security.SecureRandom().nextBytes(raw);
         StringBuilder salt = new StringBuilder();
         for (byte b : raw) salt.append(String.format("%02x", b));
-        prefs.edit().putString("dpinsalt", salt.toString()).putString("dpinhash", hashPin(pin, salt.toString())).apply();
+        prefs.edit().putString("dpinsalt", salt.toString()).putString("dpinhash", hashPin(pin, salt.toString())).putInt("dpinlen", pin.length()).apply();
     }
 
     private void setDecoyFlow() {
@@ -5352,7 +5489,7 @@ public class MainActivity extends Activity {
         new java.security.SecureRandom().nextBytes(raw);
         StringBuilder salt = new StringBuilder();
         for (byte b : raw) salt.append(String.format("%02x", b));
-        prefs.edit().putString("pinsalt", salt.toString()).putString("pinhash", hashPin(pin, salt.toString())).apply();
+        prefs.edit().putString("pinsalt", salt.toString()).putString("pinhash", hashPin(pin, salt.toString())).putInt("pinlen", pin.length()).apply();
     }
 
     private void buildLock() {
@@ -5407,12 +5544,22 @@ public class MainActivity extends Activity {
             }
             col.addView(row, new LinearLayout.LayoutParams(-1, -2));
         }
+        bioBtn = tv(t("bio_btn"), 15, ACCENT, true);
+        bioBtn.setGravity(Gravity.CENTER);
+        bioBtn.setPadding(dp(18), dp(10), dp(18), dp(10));
+        startIcon(bioBtn, R.drawable.ic_fingerprint, ACCENT);
+        bioBtn.setOnClickListener(v -> askBio());
+        bioBtn.setVisibility(View.GONE);
+        LinearLayout.LayoutParams bbp = new LinearLayout.LayoutParams(-2, -2);
+        bbp.gravity = Gravity.CENTER_HORIZONTAL;
+        bbp.topMargin = dp(10);
+        col.addView(bioBtn, bbp);
         lockView.addView(col, new FrameLayout.LayoutParams(-1, -2, Gravity.CENTER));
     }
 
     private void updateDots() {
         StringBuilder sb = new StringBuilder();
-        int shown = Math.max(4, pinBuf.length());
+        int shown = Math.max(autoPinLen() > 0 ? autoPinLen() : 4, pinBuf.length());
         for (int i = 0; i < shown; i++) sb.append(i < pinBuf.length() ? "●  " : "○  ");
         pinDots.setText(sb.toString().trim());
         if (pinBuf.length() > 0) {
@@ -5437,14 +5584,7 @@ public class MainActivity extends Activity {
             boolean realOk = checkPin(p);
             boolean fakeOk = !realOk && hasDecoy() && checkDecoy(p);
             if (realOk || fakeOk) {
-                switchVault(fakeOk);
-                authed = true;
-                pinFails = 0;
-                pinMsg.setText("");
-                shell.setVisibility(View.VISIBLE);
-                shell.setAlpha(0f);
-                shell.animate().alpha(1f).setDuration(300).start();
-                lockView.animate().alpha(0f).setDuration(260).withEndAction(() -> { lockView.setVisibility(View.GONE); lockView.setAlpha(1f); }).start();
+                unlockOk(fakeOk, p.length());
             } else {
                 pinFails++;
                 if (pinFails >= 5) { pinFails = 0; pinBlockedUntil = now + 30000; pinMsg.setText(tf("pin_blocked", 30)); }
@@ -5459,6 +5599,77 @@ public class MainActivity extends Activity {
         } else if (pinBuf.length() < 8) {
             pinBuf.append(k);
             updateDots();
+            // как на iPhone: когда набрано столько цифр, сколько в PIN, проверка запускается сама
+            final int pl = autoPinLen();
+            if (pl > 0 && pinBuf.length() == pl) ui.postDelayed(() -> { if (pinBuf.length() == pl) pinKey("✓"); }, 140);
+        }
+    }
+
+    private int autoPinLen() {
+        int pl = prefs.getInt("pinlen", 0);
+        if (pl < 4) return 0;
+        if (hasDecoy() && prefs.getInt("dpinlen", -1) != pl) return 0;
+        return pl;
+    }
+
+    private void unlockOk(boolean fake, int len) {
+        if (len >= 4) prefs.edit().putInt(fake ? "dpinlen" : "pinlen", len).apply();
+        if (bioSig != null) { try { bioSig.cancel(); } catch (Throwable ignored) { } bioSig = null; }
+        switchVault(fake);
+        authed = true;
+        pinFails = 0;
+        pinBuf.setLength(0);
+        pinMsg.setText("");
+        shell.setVisibility(View.VISIBLE);
+        shell.setAlpha(0f);
+        shell.animate().alpha(1f).setDuration(300).start();
+        lockView.animate().alpha(0f).setDuration(260).withEndAction(() -> { lockView.setVisibility(View.GONE); lockView.setAlpha(1f); }).start();
+        if (pendingPick) { pendingPick = false; ui.postDelayed(this::pickMedia, 350); }
+        if (!pendingShare.isEmpty()) ui.postDelayed(this::runPendingShare, 350);
+    }
+
+    // ---------- Отпечаток пальца / лицо (Android 9+) ----------
+    private android.os.CancellationSignal bioSig;
+    private TextView bioBtn;
+
+    private boolean bioOn() { return Build.VERSION.SDK_INT >= 28 && hasPin() && prefs.getBoolean("bio", false); }
+
+    private boolean canBio() {
+        try {
+            if (Build.VERSION.SDK_INT >= 29) {
+                android.hardware.biometrics.BiometricManager bm = getSystemService(android.hardware.biometrics.BiometricManager.class);
+                return bm != null && bm.canAuthenticate() == android.hardware.biometrics.BiometricManager.BIOMETRIC_SUCCESS;
+            }
+            if (Build.VERSION.SDK_INT >= 28) {
+                android.hardware.fingerprint.FingerprintManager fm = getSystemService(android.hardware.fingerprint.FingerprintManager.class);
+                return fm != null && fm.isHardwareDetected() && fm.hasEnrolledFingerprints();
+            }
+        } catch (Throwable ignored) { }
+        return false;
+    }
+
+    private void askBio() {
+        if (!bioOn() || lockView == null || lockView.getVisibility() != View.VISIBLE || bioSig != null || isFinishing()) return;
+        try {
+            final android.os.CancellationSignal sig = new android.os.CancellationSignal();
+            bioSig = sig;
+            android.hardware.biometrics.BiometricPrompt bp = new android.hardware.biometrics.BiometricPrompt.Builder(this)
+                    .setTitle(appName())
+                    .setSubtitle(t("bio_sub"))
+                    .setNegativeButton(t("bio_use_pin"), getMainExecutor(), (d, w) -> { if (bioSig == sig) bioSig = null; })
+                    .build();
+            bp.authenticate(sig, getMainExecutor(), new android.hardware.biometrics.BiometricPrompt.AuthenticationCallback() {
+                @Override public void onAuthenticationSucceeded(android.hardware.biometrics.BiometricPrompt.AuthenticationResult r) {
+                    if (bioSig == sig) bioSig = null;
+                    if (lockView != null && lockView.getVisibility() == View.VISIBLE) unlockOk(false, 0);
+                }
+
+                @Override public void onAuthenticationError(int code, CharSequence msg) {
+                    if (bioSig == sig) bioSig = null;
+                }
+            });
+        } catch (Throwable e) {
+            bioSig = null;
         }
     }
 
@@ -5476,6 +5687,8 @@ public class MainActivity extends Activity {
         lockView.bringToFront();
         shell.animate().cancel();
         shell.setVisibility(View.INVISIBLE);
+        if (bioBtn != null) bioBtn.setVisibility(bioOn() ? View.VISIBLE : View.GONE);
+        if (bioOn()) ui.postDelayed(this::askBio, 400);
     }
 
     private void promptPin(String title, String msg, final StrCb cb) {
@@ -5513,7 +5726,7 @@ public class MainActivity extends Activity {
     private void removePinFlow() {
         promptPin(t("pin_current"), null, cur -> {
             if (checkPin(cur)) {
-                prefs.edit().remove("pinhash").remove("pinsalt").remove("dpinhash").remove("dpinsalt").apply();
+                prefs.edit().remove("pinhash").remove("pinsalt").remove("dpinhash").remove("dpinsalt").remove("pinlen").remove("dpinlen").remove("bio").apply();
                 toast(t("pin_removed"));
                 renderSettings();
             } else toast(t("pin_wrong"));
@@ -5873,7 +6086,7 @@ public class MainActivity extends Activity {
                     TextView dRm = button(t("pin_remove"));
                     dRm.setTextColor(0xFFFFFFFF);
                     dRm.setBackground(round(RED, 12));
-                    dRm.setOnClickListener(v -> { prefs.edit().remove("dpinhash").remove("dpinsalt").apply(); renderSettings(); });
+                    dRm.setOnClickListener(v -> { prefs.edit().remove("dpinhash").remove("dpinsalt").remove("dpinlen").apply(); renderSettings(); });
                     LinearLayout.LayoutParams drp = new LinearLayout.LayoutParams(0, dp(46), 1);
                     drp.setMarginStart(dp(8));
                     dRow.addView(dRm, drp);
@@ -5882,6 +6095,31 @@ public class MainActivity extends Activity {
                 TextView dn = tv(t("decoy_note"), 11.5f, MUTED, false);
                 dn.setPadding(0, dp(6), 0, dp(6));
                 setBox.addView(dn, new LinearLayout.LayoutParams(-1, -2));
+                if (Build.VERSION.SDK_INT >= 28) {
+                    final TextView bioChip = toggleChip(prefs.getBoolean("bio", false));
+                    bioChip.setOnClickListener(v -> {
+                        boolean on = !prefs.getBoolean("bio", false);
+                        if (on && !canBio()) { toast(t("bio_none")); return; }
+                        prefs.edit().putBoolean("bio", on).apply();
+                        renderSettings();
+                    });
+                    setBox.addView(settingRow(t("bio_sw"), bioChip), new LinearLayout.LayoutParams(-1, -2));
+                    TextView bn = tv(t("bio_note"), 11.5f, MUTED, false);
+                    bn.setPadding(0, 0, 0, dp(6));
+                    setBox.addView(bn, new LinearLayout.LayoutParams(-1, -2));
+                }
+                TextView laLbl = tv(t("lock_after"), 15, FG, false);
+                laLbl.setPadding(0, dp(8), 0, dp(6));
+                setBox.addView(laLbl, new LinearLayout.LayoutParams(-1, -2));
+                Flow laFlow = new Flow(this, dp(8), dp(8));
+                int[] laOpts = {0, 30, 60, 300};
+                int curLa = prefs.getInt("lock_after", 30);
+                for (final int sec : laOpts) {
+                    TextView c = chip(sec == 0 ? t("lock_now") : sec < 60 ? tf("sec_n", sec) : tf("min_n", sec / 60), sec == curLa);
+                    c.setOnClickListener(v -> { prefs.edit().putInt("lock_after", sec).apply(); renderSettings(); });
+                    laFlow.addView(c);
+                }
+                setBox.addView(laFlow, new LinearLayout.LayoutParams(-1, -2));
             }
         }
         final TextView recentsChip = toggleChip(prefs.getBoolean("hide_recents", false));
@@ -6583,6 +6821,259 @@ public class MainActivity extends Activity {
         });
     }
 
+    // ---------- Поделиться, сохранить на устройство, принять из других приложений ----------
+    private static final int REQ_WRITE = 201;
+    private ArrayList<Library.Item> pendingSave, pendingExport;
+    private final ArrayList<Uri> pendingShare = new ArrayList<>();
+
+    private static String safeName(String n) {
+        String c = n == null ? "" : n.replaceAll("[\\\\/:*?\"<>|\\p{Cntrl}]", "_");
+        return c.isEmpty() ? "file" : c;
+    }
+
+    private static String shareMime(List<Library.Item> list) {
+        if (list.size() == 1) return ShareProvider.mimeOf(list.get(0).name);
+        boolean img = true, vid = true, pdf = true;
+        for (Library.Item it : list) {
+            if (!Library.isImage(it.name)) img = false;
+            if (!Library.isVideo(it.name)) vid = false;
+            if (!Library.isPdf(it.name)) pdf = false;
+        }
+        return img ? "image/*" : vid ? "video/*" : pdf ? "application/pdf" : "*/*";
+    }
+
+    /** Отправить файлы в другое приложение. Зашифрованные сначала расшифровываются во временную папку. */
+    private void shareItems(List<Library.Item> items) {
+        if (items == null || items.isEmpty()) return;
+        final ArrayList<Library.Item> list = new ArrayList<>(items);
+        if (list.size() > 300) { toast(tf("share_limit", 300)); return; }
+        boolean anyEnc = false;
+        for (Library.Item it : list) if (it.enc) { anyEnc = true; break; }
+        final boolean busyOn = anyEnc;
+        if (busyOn) showBusy(t("share_prep"), list.size());
+        io.execute(() -> {
+            final ArrayList<Uri> uris = new ArrayList<>();
+            int i = 0;
+            for (Library.Item it : list) {
+                i++;
+                try {
+                    File f = new File(it.path);
+                    if (it.enc) {
+                        File d = new File(ShareProvider.shareDir(this), it.id);
+                        d.mkdirs();
+                        f = new File(d, safeName(it.name));
+                        if (f.length() == 0) {
+                            File tmp = new File(f.getPath() + ".part");
+                            try (OutputStream os = new BufferedOutputStream(new FileOutputStream(tmp), 65536)) {
+                                Crypto.decrypt(this, new File(it.path), os);
+                            }
+                            if (!tmp.renameTo(f)) { tmp.delete(); continue; }
+                        }
+                    }
+                    if (f.exists()) uris.add(ShareProvider.uriFor(this, f, it.name));
+                } catch (Throwable ignored) { }
+                if (busyOn) setBusy(it.name + "  (" + i + "/" + list.size() + ")", i);
+            }
+            ui.post(() -> {
+                if (busyOn) hideBusy();
+                if (uris.isEmpty()) { toast(t("share_failed")); return; }
+                Intent in = new Intent(uris.size() == 1 ? Intent.ACTION_SEND : Intent.ACTION_SEND_MULTIPLE);
+                if (uris.size() == 1) in.putExtra(Intent.EXTRA_STREAM, uris.get(0));
+                else in.putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris);
+                in.setType(shareMime(list));
+                ClipData cd = ClipData.newRawUri("", uris.get(0));
+                for (int k = 1; k < uris.size(); k++) cd.addItem(new ClipData.Item(uris.get(k)));
+                in.setClipData(cd);
+                in.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                try {
+                    skipLock = true;
+                    startActivity(Intent.createChooser(in, t("share")));
+                } catch (Exception e) {
+                    skipLock = false;
+                    toast(t("share_failed"));
+                }
+            });
+        });
+    }
+
+    // Временные копии для «Поделиться» живут не больше часа
+    private void cleanShareDir() {
+        io.execute(() -> {
+            long lim = System.currentTimeMillis() - 3600_000L;
+            File[] ds = ShareProvider.shareDir(this).listFiles();
+            if (ds == null) return;
+            for (File d : ds) {
+                if (d.isDirectory()) {
+                    File[] fs = d.listFiles();
+                    if (fs != null) for (File f : fs) if (f.lastModified() < lim) f.delete();
+                    String[] left = d.list();
+                    if (left == null || left.length == 0) d.delete();
+                } else if (d.lastModified() < lim) d.delete();
+            }
+        });
+    }
+
+    /** Копия в общую галерею телефона (Pictures / Movies / Download → «Offline Media Vault»). */
+    private void saveToDevice(List<Library.Item> items) {
+        if (items == null || items.isEmpty()) return;
+        final ArrayList<Library.Item> list = new ArrayList<>(items);
+        if (Build.VERSION.SDK_INT < 29 && checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+            pendingSave = list;
+            skipLock = true;
+            requestPermissions(new String[]{android.Manifest.permission.WRITE_EXTERNAL_STORAGE}, REQ_WRITE);
+            return;
+        }
+        showBusy(t("saving"), list.size());
+        io.execute(() -> {
+            int ok = 0, i = 0;
+            for (Library.Item it : list) {
+                i++;
+                if (exportOne(it)) ok++;
+                setBusy(it.name + "  (" + i + "/" + list.size() + ")", i);
+            }
+            final int n = ok, total = list.size();
+            ui.post(() -> {
+                hideBusy();
+                toast(n == total ? tf("saved_n", n) : tf("saved_partial", n, total));
+            });
+        });
+    }
+
+    @Override public void onRequestPermissionsResult(int code, String[] perms, int[] res) {
+        super.onRequestPermissionsResult(code, perms, res);
+        if (code != REQ_WRITE) return;
+        ArrayList<Library.Item> l = pendingSave;
+        pendingSave = null;
+        if (res.length > 0 && res[0] == PackageManager.PERMISSION_GRANTED && l != null) saveToDevice(l);
+        else toast(t("save_denied"));
+    }
+
+    private void writePlain(Library.Item it, OutputStream os) throws Exception {
+        File f = new File(it.path);
+        if (it.enc) Crypto.decrypt(this, f, os);
+        else try (InputStream in = new FileInputStream(f)) { pump(in, os); }
+    }
+
+    private boolean exportOne(Library.Item it) {
+        boolean vid = Library.isVideo(it.name), pdf = Library.isPdf(it.name);
+        String mime = ShareProvider.mimeOf(it.name);
+        String dirName = pdf ? android.os.Environment.DIRECTORY_DOWNLOADS : vid ? android.os.Environment.DIRECTORY_MOVIES : android.os.Environment.DIRECTORY_PICTURES;
+        try {
+            if (Build.VERSION.SDK_INT >= 29) {
+                android.content.ContentValues cv = new android.content.ContentValues();
+                cv.put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, safeName(it.name));
+                cv.put(android.provider.MediaStore.MediaColumns.MIME_TYPE, mime);
+                cv.put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, dirName + "/Offline Media Vault");
+                cv.put(android.provider.MediaStore.MediaColumns.IS_PENDING, 1);
+                Uri coll = pdf ? android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI
+                        : vid ? android.provider.MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+                        : android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI;
+                Uri u = getContentResolver().insert(coll, cv);
+                if (u == null) return false;
+                try (OutputStream os = getContentResolver().openOutputStream(u)) {
+                    if (os == null) throw new IOException("no stream");
+                    writePlain(it, os);
+                } catch (Exception e) {
+                    try { getContentResolver().delete(u, null, null); } catch (Exception ignored) { }
+                    return false;
+                }
+                cv.clear();
+                cv.put(android.provider.MediaStore.MediaColumns.IS_PENDING, 0);
+                getContentResolver().update(u, cv, null, null);
+                return true;
+            }
+            File dir = new File(android.os.Environment.getExternalStoragePublicDirectory(dirName), "Offline Media Vault");
+            dir.mkdirs();
+            String clean = safeName(it.name), base = Library.baseName(clean), ext = clean.substring(base.length());
+            File out = new File(dir, clean);
+            int n = 1;
+            while (out.exists()) out = new File(dir, base + " (" + (n++) + ")" + ext);
+            try (OutputStream os = new BufferedOutputStream(new FileOutputStream(out), 65536)) {
+                writePlain(it, os);
+            } catch (Exception e) {
+                out.delete();
+                return false;
+            }
+            android.media.MediaScannerConnection.scanFile(this, new String[]{out.getAbsolutePath()}, new String[]{mime}, null);
+            return true;
+        } catch (Throwable e) {
+            return false;
+        }
+    }
+
+    // «Поделиться» из галереи, браузера, мессенджера → файлы попадают в хранилище
+    private void takeShared(Intent in) {
+        if (in == null) return;
+        String a = in.getAction();
+        if (!Intent.ACTION_SEND.equals(a) && !Intent.ACTION_SEND_MULTIPLE.equals(a)) return;
+        LinkedHashSet<Uri> us = new LinkedHashSet<>();
+        try {
+            if (Intent.ACTION_SEND.equals(a)) {
+                Uri u = in.getParcelableExtra(Intent.EXTRA_STREAM);
+                if (u != null) us.add(u);
+            } else {
+                ArrayList<Uri> l = in.getParcelableArrayListExtra(Intent.EXTRA_STREAM);
+                if (l != null) us.addAll(l);
+            }
+        } catch (Throwable ignored) { }
+        ClipData cd = in.getClipData();
+        if (cd != null) for (int i = 0; i < cd.getItemCount(); i++) {
+            Uri u = cd.getItemAt(i).getUri();
+            if (u != null) us.add(u);
+        }
+        pendingShare.addAll(us);
+    }
+
+    private void runPendingShare() {
+        if (pendingShare.isEmpty()) return;
+        final ArrayList<Uri> all = new ArrayList<>(pendingShare);
+        pendingShare.clear();
+        ArrayList<Uri> media = new ArrayList<>();
+        Uri zip = null;
+        for (Uri u : all) {
+            String type = null;
+            try { type = getContentResolver().getType(u); } catch (Exception ignored) { }
+            String n = getName(u).toLowerCase(Locale.ROOT);
+            if (n.endsWith(".zip") || "application/zip".equals(type) || "application/x-zip-compressed".equals(type)) { if (zip == null) zip = u; }
+            else media.add(u);
+        }
+        if (!media.isEmpty()) importUris(media);
+        else if (zip != null) importZip(zip, getName(zip));
+    }
+
+    // Если у файла нет расширения (так бывает при «Поделиться»), добавляем его по MIME-типу
+    private String ensureExt(Uri u, String name) {
+        if (Library.isMedia(name)) return name;
+        String mime = null;
+        try { mime = getContentResolver().getType(u); } catch (Exception ignored) { }
+        if (mime == null) return name;
+        String ext;
+        switch (mime) {
+            case "image/jpeg": ext = "jpg"; break;
+            case "video/quicktime": ext = "mov"; break;
+            case "video/x-matroska": ext = "mkv"; break;
+            default: ext = android.webkit.MimeTypeMap.getSingleton().getExtensionFromMimeType(mime);
+        }
+        if (ext == null) return name;
+        String cand = name + "." + ext;
+        return Library.isMedia(cand) ? cand : name;
+    }
+
+    // Действия с выделенными файлами, которые не поместились на панель
+    private void moreActions(final ArrayList<Library.Item> targets, final Runnable done) {
+        if (targets.isEmpty()) return;
+        boolean allFav = true;
+        for (Library.Item it : targets) if (!it.fav) { allFav = false; break; }
+        final boolean af = allFav;
+        sheet(tf("sel_n", targets.size()), null,
+                new Act("⤴", t("share"), t("share_d"), 0, () -> shareItems(targets)),
+                new Act("⤓", t("save_device"), t("save_device_d"), 0, () -> saveToDevice(targets)),
+                new Act(af ? "♡" : "♥", af ? t("rm_from_fav") : t("add_to_fav"), null, 0, () -> toggleFav(targets)),
+                new Act("▣", t("pick_album"), t("pick_album_d"), 0, () -> chooseAlbum(targets)),
+                new Act("🏷", t("act_tags"), t("tags_bulk_d"), 0, () -> bulkTags(targets, done)),
+                new Act("🗜", t("export_sel"), t("export_sel_d"), 0, () -> startExport(targets)));
+    }
+
     // ---------- Загрузка файлов, ZIP, PDF ----------
     private AlertDialog busy;
     private TextView busyText;
@@ -6647,7 +7138,10 @@ public class MainActivity extends Activity {
         startActivityForResult(i, PICK_PDF);
     }
 
-    private void startExport() {
+    private void startExport() { startExport(null); }
+
+    private void startExport(ArrayList<Library.Item> only) {
+        pendingExport = only;
         skipLock = true;
         Intent i = new Intent(Intent.ACTION_CREATE_DOCUMENT);
         i.addCategory(Intent.CATEGORY_OPENABLE);
@@ -6701,7 +7195,7 @@ public class MainActivity extends Activity {
             final ArrayList<Library.Item> newItems = new ArrayList<>();
             for (int i = 0; i < uris.size(); i++) {
                 Uri u = uris.get(i);
-                String name = getName(u);
+                String name = ensureExt(u, getName(u));
                 if (!Library.isMedia(name)) {
                     final String m = tf("skipped", name);
                     ui.post(() -> toast(m));
@@ -6802,7 +7296,8 @@ public class MainActivity extends Activity {
     }
 
     private void exportAll(final Uri uri) {
-        final ArrayList<Library.Item> list = lib.active();
+        final ArrayList<Library.Item> list = pendingExport != null ? new ArrayList<>(pendingExport) : lib.active();
+        pendingExport = null;
         showBusy(t("exporting"), Math.max(1, list.size()));
         io.execute(() -> {
             int n = 0;

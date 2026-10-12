@@ -698,4 +698,69 @@ final class Strings {
         a("pinch_hint", "Tip: pinch the grid to change tile size, long-press and drag to select many", "Совет: сведите или разведите пальцы, чтобы изменить размер плиток; зажмите и протяните — выделите сразу много", "Consejo: pellizca la cuadrícula para cambiar el tamaño; mantén pulsado y arrastra para seleccionar varios", "نکته: با دو انگشت اندازه کاشی‌ها را تغییر دهید؛ لمس طولانی و کشیدن برای انتخاب چندتایی");
         b("pinch_hint", "Tipp: Mit zwei Fingern die Kachelgröße ändern; lange drücken und ziehen, um viele auszuwählen", "Astuce : pincez pour changer la taille des vignettes ; appui long puis glisser pour en sélectionner plusieurs", "提示：双指缩放可调整缩略图大小；长按并拖动可批量选择", "ヒント：ピンチでタイルの大きさを変更、長押ししてなぞると複数選択できます");
     }
+
+    static { v3b(); }
+
+    private static void v3b() {
+        a("share", "Share", "Поделиться", "Compartir", "اشتراک‌گذاری");
+        b("share", "Teilen", "Partager", "分享", "共有");
+        a("share_d", "Send to another app", "Отправить в другое приложение", "Enviar a otra app", "ارسال به برنامهٔ دیگر");
+        b("share_d", "An eine andere App senden", "Envoyer vers une autre app", "发送到其他应用", "別のアプリに送る");
+        a("share_prep", "Preparing files…", "Готовлю файлы…", "Preparando archivos…", "در حال آماده‌سازی فایل‌ها…");
+        b("share_prep", "Dateien werden vorbereitet…", "Préparation des fichiers…", "正在准备文件…", "ファイルを準備中…");
+        a("share_failed", "Could not share the files", "Не удалось поделиться файлами", "No se pudieron compartir los archivos", "اشتراک‌گذاری فایل‌ها ممکن نشد");
+        b("share_failed", "Teilen fehlgeschlagen", "Impossible de partager les fichiers", "无法分享文件", "共有できませんでした");
+        a("share_limit", "You can share up to %d files at once", "За раз можно поделиться не больше чем %d файлами", "Puedes compartir hasta %d archivos a la vez", "حداکثر %d فایل را می‌توان هم‌زمان فرستاد");
+        b("share_limit", "Höchstens %d Dateien auf einmal", "Jusqu'à %d fichiers à la fois", "一次最多分享 %d 个文件", "一度に共有できるのは %d 件までです");
+        a("save_device", "Save to gallery", "Сохранить в галерею", "Guardar en la galería", "ذخیره در گالری");
+        b("save_device", "In Galerie speichern", "Enregistrer dans la galerie", "保存到相册", "ギャラリーに保存");
+        a("save_device_d", "A copy goes to Pictures / Movies / Download → Offline Media Vault", "Копия появится в «Изображения / Фильмы / Загрузки → Offline Media Vault»", "Se guarda una copia en Imágenes / Películas / Descargas → Offline Media Vault", "یک نسخه در Pictures / Movies / Download → Offline Media Vault ذخیره می‌شود");
+        b("save_device_d", "Eine Kopie landet in Bilder / Filme / Download → Offline Media Vault", "Une copie est placée dans Images / Films / Téléchargements → Offline Media Vault", "副本将保存到 图片 / 影片 / 下载 → Offline Media Vault", "コピーを 写真 / 動画 / ダウンロード → Offline Media Vault に保存");
+        a("saving", "Saving to gallery…", "Сохраняю в галерею…", "Guardando en la galería…", "در حال ذخیره در گالری…");
+        b("saving", "Wird in Galerie gespeichert…", "Enregistrement…", "正在保存到相册…", "ギャラリーに保存中…");
+        a("saved_n", "Saved to gallery: %d", "Сохранено в галерею: %d", "Guardados en la galería: %d", "در گالری ذخیره شد: %d");
+        b("saved_n", "In Galerie gespeichert: %d", "Enregistrés : %d", "已保存到相册：%d", "ギャラリーに保存：%d");
+        a("saved_partial", "Saved %d of %d — some files could not be copied", "Сохранено %d из %d — часть файлов скопировать не удалось", "Guardados %d de %d: algunos no se pudieron copiar", "%d از %d ذخیره شد — برخی فایل‌ها کپی نشدند");
+        b("saved_partial", "%d von %d gespeichert – einige Dateien fehlgeschlagen", "%d sur %d enregistrés — certains fichiers ont échoué", "已保存 %d / %d，部分文件复制失败", "%d / %d 件を保存。一部はコピーできませんでした");
+        a("save_denied", "No permission to save to the gallery", "Нет разрешения на сохранение в галерею", "Sin permiso para guardar en la galería", "اجازهٔ ذخیره در گالری داده نشد");
+        b("save_denied", "Keine Berechtigung zum Speichern", "Autorisation refusée", "没有保存到相册的权限", "保存する権限がありません");
+        a("more", "More", "Ещё", "Más", "بیشتر");
+        b("more", "Mehr", "Plus", "更多", "その他");
+        a("delete", "Delete", "Удалить", "Eliminar", "حذف");
+        b("delete", "Löschen", "Supprimer", "删除", "削除");
+        a("tags_bulk_d", "Add or replace tags on all selected files", "Добавить или заменить теги у всех выбранных", "Añadir o reemplazar etiquetas en todos", "افزودن یا جایگزینی برچسب برای همهٔ موارد انتخاب‌شده");
+        b("tags_bulk_d", "Tags für alle ausgewählten hinzufügen oder ersetzen", "Ajouter ou remplacer les tags de la sélection", "为所有选中项添加或替换标签", "選択したすべてにタグを追加・置換");
+        a("export_sel", "Export to ZIP", "Экспорт в ZIP", "Exportar a ZIP", "خروجی ZIP");
+        b("export_sel", "Als ZIP exportieren", "Exporter en ZIP", "导出为 ZIP", "ZIP に書き出す");
+        a("export_sel_d", "Backup of the selected files with tags and albums", "Резервная копия выбранных файлов с тегами и альбомами", "Copia de los archivos seleccionados con etiquetas y álbumes", "پشتیبان فایل‌های انتخاب‌شده با برچسب و آلبوم");
+        b("export_sel_d", "Sicherung der Auswahl mit Tags und Alben", "Sauvegarde de la sélection avec tags et albums", "备份所选文件（含标签与相册）", "選択したファイルをタグ・アルバムごとバックアップ");
+        a("slideshow", "Slideshow", "Слайд-шоу", "Presentación", "نمایش اسلاید");
+        b("slideshow", "Diashow", "Diaporama", "幻灯片", "スライドショー");
+        a("slide_on", "Slideshow started — tap to stop", "Слайд-шоу запущено — коснитесь, чтобы остановить", "Presentación iniciada: toca para detener", "نمایش اسلاید شروع شد — برای توقف لمس کنید");
+        b("slide_on", "Diashow läuft – tippen zum Beenden", "Diaporama lancé — touchez pour arrêter", "幻灯片已开始，轻触即可停止", "スライドショー開始 — タップで停止");
+        a("slide_off", "Slideshow stopped", "Слайд-шоу остановлено", "Presentación detenida", "نمایش اسلاید متوقف شد");
+        b("slide_off", "Diashow beendet", "Diaporama arrêté", "幻灯片已停止", "スライドショーを停止しました");
+        a("slide_need", "A slideshow needs at least two files", "Для слайд-шоу нужно хотя бы два файла", "La presentación necesita al menos dos archivos", "برای نمایش اسلاید دست‌کم دو فایل لازم است");
+        b("slide_need", "Mindestens zwei Dateien nötig", "Il faut au moins deux fichiers", "幻灯片至少需要两个文件", "2 つ以上のファイルが必要です");
+        a("bio_sub", "Confirm it's you", "Подтвердите, что это вы", "Confirma que eres tú", "تأیید کنید که خودتان هستید");
+        b("bio_sub", "Bestätigen Sie Ihre Identität", "Confirmez votre identité", "请确认是您本人", "本人確認");
+        a("bio_use_pin", "Use PIN", "Ввести PIN", "Usar PIN", "استفاده از PIN");
+        b("bio_use_pin", "PIN verwenden", "Utiliser le code", "使用 PIN", "PIN を使う");
+        a("bio_btn", "Unlock with fingerprint", "Войти по отпечатку", "Desbloquear con huella", "باز کردن با اثر انگشت");
+        b("bio_btn", "Mit Fingerabdruck entsperren", "Déverrouiller par empreinte", "使用指纹解锁", "指紋でロック解除");
+        a("bio_sw", "Fingerprint / face unlock", "Вход по отпечатку / лицу", "Desbloqueo con huella o rostro", "ورود با اثر انگشت / چهره");
+        b("bio_sw", "Entsperren per Fingerabdruck / Gesicht", "Déverrouillage par empreinte / visage", "指纹 / 面容解锁", "指紋・顔認証でロック解除");
+        a("bio_note", "Biometrics always open the real vault; the decoy PIN works only by typing it", "Отпечаток всегда открывает настоящее хранилище; запасной PIN работает только при вводе", "La biometría siempre abre la bóveda real; el PIN señuelo solo funciona al escribirlo", "بیومتریک همیشه گنجینهٔ اصلی را باز می‌کند؛ PIN جعلی فقط با تایپ کار می‌کند");
+        b("bio_note", "Biometrie öffnet immer den echten Tresor; die Tarn-PIN funktioniert nur per Eingabe", "La biométrie ouvre toujours le vrai coffre ; le code leurre ne fonctionne qu'en le tapant", "生物识别总是打开真实保险库；伪装 PIN 只能手动输入", "生体認証は常に本物の保管庫を開きます。ダミー PIN は入力時のみ有効");
+        a("bio_none", "No fingerprint or face is set up on this phone", "На телефоне не настроены отпечаток или лицо", "No hay huella ni rostro configurados en este teléfono", "اثر انگشت یا چهره‌ای روی گوشی تنظیم نشده است");
+        b("bio_none", "Kein Fingerabdruck oder Gesicht eingerichtet", "Aucune empreinte ni visage configuré", "此手机未设置指纹或面容", "この端末に指紋・顔が登録されていません");
+        a("lock_after", "Ask for PIN after leaving the app", "Просить PIN после выхода из приложения", "Pedir PIN al salir de la app", "درخواست PIN پس از خروج از برنامه");
+        b("lock_after", "PIN nach Verlassen der App verlangen", "Demander le code après avoir quitté l'app", "离开应用后要求 PIN", "アプリを離れた後に PIN を要求");
+        a("lock_now", "Immediately", "Сразу", "Inmediatamente", "بلافاصله");
+        b("lock_now", "Sofort", "Immédiatement", "立即", "すぐに");
+        a("sec_n", "%d s", "%d с", "%d s", "%d ثانیه");
+        b("sec_n", "%d s", "%d s", "%d 秒", "%d 秒");
+        a("min_n", "%d min", "%d мин", "%d min", "%d دقیقه");
+        b("min_n", "%d Min.", "%d min", "%d 分钟", "%d 分");
+    }
 }

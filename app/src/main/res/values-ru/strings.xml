@@ -4,4 +4,5 @@
     <string name="shortcut_upload_long">Загрузить файлы</string>
     <string name="shortcut_fav">Избранное</string>
     <string name="shortcut_fav_long">Открыть избранное</string>
+    <string name="share_label">В хранилище</string>
 </resources>

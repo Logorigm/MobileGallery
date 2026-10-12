@@ -88,6 +88,7 @@ final class Library {
     final ArrayList<Album> albums = new ArrayList<>();
     private long lastStamp = 0;
     private final Random rnd = new Random();
+    volatile int rev = 0;   // растёт при каждом сохранении: другое окно приложения видит, что данные изменились
 
     Library(File filesDir) {
         mediaDir = new File(filesDir, "media");
@@ -314,6 +315,7 @@ final class Library {
     }
 
     synchronized void save() {
+        rev++;
         try {
             JSONObject o = new JSONObject();
             o.put("v", 2);
