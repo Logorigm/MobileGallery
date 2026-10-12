@@ -283,13 +283,15 @@ public class MainActivity extends Activity {
         buildAll();
         applyTaskDesc();
         if (hasPin() && !authed) showLock();
-        else if (b == null) {
-            shell.setAlpha(0f);
-            shell.setTranslationY(dp(18));
-            shell.animate().alpha(1f).translationY(0f).setDuration(420).setInterpolator(new DecelerateInterpolator(2f)).start();
+        else {
+            if (b == null) {
+                shell.setAlpha(0f);
+                shell.setTranslationY(dp(18));
+                shell.animate().alpha(1f).translationY(0f).setDuration(420).setInterpolator(new DecelerateInterpolator(2f)).start();
+            }
+            if (pendingPick) { pendingPick = false; ui.post(this::pickMedia); }
         }
         ui.postDelayed(this::checkCrash, 700);
-        else if (pendingPick) { pendingPick = false; ui.post(this::pickMedia); }
     }
 
     private static boolean crashHook = false;
