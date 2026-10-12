@@ -30,6 +30,7 @@ import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.Rect;
 import android.graphics.Typeface;
+import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.RippleDrawable;
@@ -55,6 +56,9 @@ import android.text.TextUtils;
 import android.util.LruCache;
 import android.view.GestureDetector;
 import android.view.HapticFeedbackConstants;
+import android.view.VelocityTracker;
+import android.animation.ValueAnimator;
+import android.widget.SeekBar;
 import android.view.animation.DecelerateInterpolator;
 import android.text.SpannableString;
 import android.text.style.RelativeSizeSpan;
@@ -109,6 +113,7 @@ import java.util.zip.ZipOutputStream;
 public class MainActivity extends Activity {
     interface StrCb { void on(String s); }
     interface IntCb { void on(int i); }
+    interface FloatCb { void on(float f); }
 
     static class Thumb { Bitmap bmp; long dur; int pages; }
     static class PdfHolder { PdfRenderer r; ParcelFileDescriptor pfd; int pages = 0, page = 0; }
@@ -137,6 +142,13 @@ public class MainActivity extends Activity {
             case "＋": case "+": return R.drawable.ic_add;
             case "−": return R.drawable.ic_remove;
             case "↑": return R.drawable.ic_arrow_up;
+            case "⏸": return R.drawable.ic_pause;
+            case "ⓘ": return R.drawable.ic_info;
+            case "↻": return R.drawable.ic_rotate;
+            case "🏷": return R.drawable.ic_tag;
+            case "🎲": return R.drawable.ic_shuffle;
+            case "↗": return R.drawable.ic_remove;
+            case "🖼": return R.drawable.ic_photo;
             default: return 0;
         }
     }
@@ -359,6 +371,7 @@ public class MainActivity extends Activity {
     private LinearLayout shell;
     private final View[] tabViews = new View[4];
     private final ImageView[] tabBtns = new ImageView[4];
+    private final TextView[] tabLbls = new TextView[4];
     private int curTab = 0;
     private int startTab = -1;
 
@@ -393,8 +406,8 @@ public class MainActivity extends Activity {
         super.onCreate(b);
         prefs = getSharedPreferences("omv_settings", 0);
         loadFonts();
-        cols = Math.max(1, Math.min(4, prefs.getInt("cols", 2)));
-        showNames = prefs.getBoolean("names", true);
+        cols = Math.max(1, Math.min(5, prefs.getInt("cols", 3)));
+        showNames = prefs.getBoolean("names", false);
         applyTheme();
         lib = openLib();
         applySecure();
@@ -683,20 +696,46 @@ public class MainActivity extends Activity {
     private FrameLayout barWrapRef;
     private int navInset = 0;
 
-    // Шрифт Inter (латиница и кириллица); для фарси, китайского и японского — системный
-    private void loadFonts() {
-        if (lang.equals(fontLang)) return;
-        fontLang = lang;
-        TF_REG = TF_MED = TF_SEMI = TF_DISP = null;
-        if ("fa".equals(lang) || "zh".equals(lang) || "ja".equals(lang)) return;
-        try {
-            TF_REG = Typeface.createFromAsset(getAssets(), "fonts/Inter-Regular.ttf");
-            TF_MED = Typeface.createFromAsset(getAssets(), "fonts/Inter-Medium.ttf");
-            TF_SEMI = Typeface.createFromAsset(getAssets(), "fonts/Inter-SemiBold.ttf");
-            TF_DISP = Typeface.createFromAsset(getAssets(), "fonts/InterDisplay-Bold.ttf");
-        } catch (Throwable e) {
-            TF_REG = TF_MED = TF_SEMI = TF_DISP = null;
+    private static float fontScale = 1f;
+    private static final HashMap<String, Typeface> FONT_CACHE = new HashMap<>();
+
+    private Typeface asset(String name) {
+        Typeface t = FONT_CACHE.get(name);
+        if (t == null) {
+            try { t = Typeface.createFromAsset(getAssets(), "fonts/" + name + ".ttf"); } catch (Throwable e) { return null; }
+            FONT_CACHE.put(name, t);
         }
+        return t;
+    }
+
+    // Выбранный в настройках шрифт; для фарси, китайского и японского всегда системный
+    private void loadFonts() {
+        String f = prefs.getString("font", "inter");
+        String key = lang + "|" + f;
+        if (key.equals(fontLang)) return;
+        fontLang = key;
+        TF_REG = TF_MED = TF_SEMI = TF_DISP = null;
+        fontScale = 1f;
+        if ("fa".equals(lang) || "zh".equals(lang) || "ja".equals(lang) || "system".equals(f)) return;
+        String r, m, sb, d;
+        switch (f) {
+            case "plex": r = "Plex-Regular"; m = "Plex-Regular"; sb = "Plex-SemiBold"; d = "Plex-Bold"; break;
+            case "serif": r = "PTSerif-Regular"; m = r; sb = "PTSerif-Bold"; d = sb; break;
+            case "hand": r = "Caveat-Regular"; m = r; sb = "Caveat-Bold"; d = sb; fontScale = 1.22f; break;
+            default: r = "Inter-Regular"; m = "Inter-Medium"; sb = "Inter-SemiBold"; d = "InterDisplay-Bold";
+        }
+        TF_REG = asset(r);
+        TF_MED = asset(m);
+        TF_SEMI = asset(sb);
+        TF_DISP = asset(d);
+        if (TF_REG == null || TF_SEMI == null) { TF_REG = TF_MED = TF_SEMI = TF_DISP = null; fontScale = 1f; }
+    }
+
+    // «ЗАЩИТА ФАЙЛОВ» → «Защита файлов»
+    private String cap(String x) {
+        if (x == null || x.isEmpty()) return x;
+        String l = x.toLowerCase(new Locale(lang));
+        return l.substring(0, 1).toUpperCase(new Locale(lang)) + l.substring(1);
     }
 
     private Typeface boldFace() { return TF_SEMI != null ? TF_SEMI : Typeface.DEFAULT_BOLD; }
@@ -706,7 +745,7 @@ public class MainActivity extends Activity {
     private TextView tv(String text, float size, int color, boolean bold) {
         TextView v = glyphRes(text) != 0 ? new GlyphView(this) : new TextView(this);
         v.setText(text);
-        v.setTextSize(size);
+        v.setTextSize(glyphRes(text) != 0 ? size : size * fontScale);
         v.setTextColor(color);
         if (bold) v.setTypeface(boldFace());
         else if (TF_REG != null) v.setTypeface(TF_REG);
@@ -715,9 +754,9 @@ public class MainActivity extends Activity {
 
     // Крупный заголовок экрана
     private TextView headline(String text, float size) {
-        GradText g = new GradText(this, FG, blend(FG, ACCENT, 0.75f));
+        TextView g = new TextView(this);
         g.setText(text);
-        g.setTextSize(size);
+        g.setTextSize(size * 0.9f * fontScale);
         g.setTextColor(FG);
         g.setTypeface(dispFace());
         g.setLetterSpacing(-0.015f);
@@ -726,27 +765,13 @@ public class MainActivity extends Activity {
         return g;
     }
 
-    private GradientDrawable accentBg(int radius) {
-        GradientDrawable g = new GradientDrawable(GradientDrawable.Orientation.TL_BR, new int[]{ACCENT, ACCENT2});
-        g.setCornerRadius(dp(radius));
-        return g;
-    }
+    private GradientDrawable accentBg(int radius) { return round(ACCENT, radius); }
 
     // Карточка «стекло»: фон панели + тонкая светлая кромка
-    private GradientDrawable panel(int radius) {
-        GradientDrawable g = round(PANEL, radius);
-        g.setStroke(Math.max(1, dp(1) / 2 + 1), (FG & 0x00FFFFFF) | (darkTheme ? 0x16000000 : 0x12000000));
-        return g;
-    }
+    private GradientDrawable panel(int radius) { return round(PANEL, radius); }
 
     // Цветная тень (Android 9+)
-    private void glow(View v, int color, int elev) {
-        v.setElevation(dp(elev));
-        if (Build.VERSION.SDK_INT >= 28) {
-            v.setOutlineSpotShadowColor(color);
-            v.setOutlineAmbientShadowColor(color);
-        }
-    }
+    private void glow(View v, int color, int elev) { }
 
     private Drawable icon(int res, int tint) {
         Drawable d = getDrawable(res).mutate();
@@ -839,7 +864,7 @@ public class MainActivity extends Activity {
             int a = e.getActionMasked();
             if (a == MotionEvent.ACTION_DOWN) x.animate().scaleX(0.95f).scaleY(0.95f).setDuration(90).start();
             else if (a == MotionEvent.ACTION_UP || a == MotionEvent.ACTION_CANCEL)
-                x.animate().scaleX(1f).scaleY(1f).setDuration(220).setInterpolator(new OvershootInterpolator(2f)).start();
+                x.animate().scaleX(1f).scaleY(1f).setDuration(220).setInterpolator(new DecelerateInterpolator(1.5f)).start();
             return false;
         });
     }
@@ -1024,25 +1049,24 @@ public class MainActivity extends Activity {
         if (TF_REG != null) e.setTypeface(TF_REG);
     }
 
-    private View sectionLabel(String emoji, String s) {
+    private View sectionLabel(int res, String s) {
         LinearLayout row = new LinearLayout(this);
         row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(dp(4), dp(20), 0, dp(10));
-        TextView ic = tv(emoji, 14, FG, false);
-        ic.setGravity(Gravity.CENTER);
-        ic.setBackground(round(blend(BG, ACCENT, darkTheme ? 0.24f : 0.16f), 9));
-        row.addView(ic, new LinearLayout.LayoutParams(dp(28), dp(28)));
-        TextView l = tv(s, 12, MUTED, true);
-        l.setLetterSpacing(0.08f);
-        l.setPadding(dp(10), 0, 0, 0);
+        row.setPadding(dp(2), dp(18), 0, dp(10));
+        ImageView ic = new ImageView(this);
+        ic.setImageResource(res);
+        ic.setColorFilter(ACCENT);
+        row.addView(ic, new LinearLayout.LayoutParams(dp(20), dp(20)));
+        TextView l = tv(cap(s), 14, ACCENT, true);
+        l.setPadding(dp(12), 0, 0, 0);
         row.addView(l, new LinearLayout.LayoutParams(0, -2, 1));
         row.setTag("sec");
         return row;
     }
 
     private TextView sectionLabel(String s) {
-        TextView l = tv(s, 12, MUTED, true);
-        l.setPadding(dp(6), dp(16), 0, dp(8));
+        TextView l = tv(cap(s), 13, ACCENT, true);
+        l.setPadding(dp(2), dp(16), 0, dp(8));
         l.setTag("sec");
         return l;
     }
@@ -1166,43 +1190,39 @@ public class MainActivity extends Activity {
         String[] names = {t("tab_feed"), t("tab_albums"), t("tab_upload"), t("tab_settings")};
         for (int i = 0; i < 4; i++) {
             final int k = i;
-            FrameLayout cellT = new FrameLayout(this);
+            LinearLayout cellT = new LinearLayout(this);
+            cellT.setOrientation(LinearLayout.VERTICAL);
+            cellT.setGravity(Gravity.CENTER);
             ImageView b = new ImageView(this);
             b.setImageResource(NAV_ICONS[i]);
             b.setScaleType(ImageView.ScaleType.FIT_CENTER);
-            b.setPadding(dp(18), dp(7), dp(18), dp(7));
             b.setContentDescription(names[i]);
-            cellT.setOnClickListener(v -> { buzz(v, HapticFeedbackConstants.KEYBOARD_TAP); if (curTab == k) scrollTop(k); else showTab(k); });
-            pressFx(b);
-            b.setClickable(false);
             tabBtns[i] = b;
-            cellT.addView(b, new FrameLayout.LayoutParams(dp(68), dp(40), Gravity.CENTER));
+            cellT.addView(b, new LinearLayout.LayoutParams(dp(24), dp(24)));
+            TextView lb = tv(names[i], 11, MUTED, false);
+            lb.setSingleLine(true);
+            lb.setEllipsize(TextUtils.TruncateAt.END);
+            lb.setGravity(Gravity.CENTER);
+            tabLbls[i] = lb;
+            LinearLayout.LayoutParams lbp = new LinearLayout.LayoutParams(-2, -2);
+            lbp.topMargin = dp(3);
+            cellT.addView(lb, lbp);
+            cellT.setOnClickListener(v -> { buzz(v, HapticFeedbackConstants.KEYBOARD_TAP); if (curTab == k) scrollTop(k); else showTab(k); });
+            addRipple(cellT);
             bar.addView(cellT, new LinearLayout.LayoutParams(0, -1, 1));
         }
         FrameLayout barWrap = new FrameLayout(this);
-        GradientDrawable nbg = new GradientDrawable();
-        nbg.setColor(hasBg() ? ((PANEL & 0x00FFFFFF) | 0xE0000000) : PANEL);
-        float nr = dp(24);
-        nbg.setCornerRadii(new float[]{nr, nr, nr, nr, 0, 0, 0, 0});
-        barWrap.setBackground(nbg);
-        barWrap.setElevation(dp(10));
-        navInd = new View(this);
-        navInd.setBackground(round(blend(PANEL, ACCENT, 0.24f), 20));
-        navInd.setBackground(new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, new int[]{blend(PANEL, ACCENT, 0.28f), blend(PANEL, ACCENT2, 0.28f)}));
-        ((GradientDrawable) navInd.getBackground()).setCornerRadius(dp(20));
+        barWrap.setBackgroundColor(hasBg() ? ((BG & 0x00FFFFFF) | 0xE6000000) : BG);
         FrameLayout barInner = new FrameLayout(this);
-        barInner.addView(navInd, new FrameLayout.LayoutParams(dp(68), dp(40), Gravity.LEFT | Gravity.CENTER_VERTICAL));
         barInner.addView(bar, new FrameLayout.LayoutParams(-1, -1));
+        View hair = new View(this);
+        hair.setBackgroundColor((FG & 0x00FFFFFF) | 0x1A000000);
+        barInner.addView(hair, new FrameLayout.LayoutParams(-1, Math.max(1, dp(1) / 2), Gravity.TOP));
         barWrap.addView(barInner, new FrameLayout.LayoutParams(-1, dp(62), Gravity.TOP));
         barWrapRef = barWrap;
         shell.addView(barWrap, new LinearLayout.LayoutParams(-1, dp(62)));
         appRoot = new FrameLayout(this);
         appRoot.setBackgroundColor(BG);
-        aurora = new Aurora(this, ACCENT, ACCENT2, darkTheme);
-        aurora.setScaleX(1.25f);
-        aurora.setScaleY(1.1f);
-        aurora.setVisibility(hasBg() ? View.GONE : View.VISIBLE);
-        appRoot.addView(aurora, new FrameLayout.LayoutParams(-1, -1));
         bgView = new ImageView(this);
         bgView.setScaleType(ImageView.ScaleType.CENTER_CROP);
         appRoot.addView(bgView, new FrameLayout.LayoutParams(-1, -1));
@@ -1226,7 +1246,7 @@ public class MainActivity extends Activity {
         int pos = wrap.getLayoutDirection() == View.LAYOUT_DIRECTION_RTL ? 3 - curTab : curTab;
         float x = w / 4f * pos + w / 8f - dp(34);
         navInd.animate().cancel();
-        if (anim) navInd.animate().translationX(x).setDuration(360).setInterpolator(new OvershootInterpolator(1.3f)).start();
+        if (anim) navInd.animate().translationX(x).setDuration(360).setInterpolator(new DecelerateInterpolator(1.5f)).start();
         else navInd.setTranslationX(x);
     }
 
@@ -1275,12 +1295,8 @@ public class MainActivity extends Activity {
             tabViews[i].setTranslationX(0f);
             boolean on = i == tab;
             tabBtns[i].setColorFilter(on ? ACCENT : MUTED);
-            if (on && changed && !first) {
-                final View ib = tabBtns[i];
-                ib.animate().cancel();
-                ib.animate().scaleX(1.22f).scaleY(1.22f).setDuration(110).withEndAction(() ->
-                        ib.animate().scaleX(1.06f).scaleY(1.06f).setDuration(260).setInterpolator(new OvershootInterpolator(3f)).start()).start();
-            } else tabBtns[i].animate().scaleX(on ? 1.06f : 1f).scaleY(on ? 1.06f : 1f).setDuration(200).start();
+            tabLbls[i].setTextColor(on ? ACCENT : MUTED);
+            tabLbls[i].setTypeface(on ? boldFace() : (TF_REG != null ? TF_REG : Typeface.DEFAULT));
         }
         if (changed && !first) {
             View v = tabViews[tab];
@@ -1371,49 +1387,46 @@ public class MainActivity extends Activity {
     private FrameLayout makeThumb(Library.Item it) {
         boolean vid = Library.isVideo(it.name), pdf = Library.isPdf(it.name);
         FrameLayout fl = new FrameLayout(this);
-        fl.setBackground(round(FIELD, 16));
+        fl.setBackground(round(FIELD, 6));
         ImageView iv = new ImageView(this);
         iv.setScaleType(ImageView.ScaleType.CENTER_CROP);
         iv.setOutlineProvider(new ViewOutlineProvider() {
-            @Override public void getOutline(View v, Outline o) { o.setRoundRect(0, 0, v.getWidth(), v.getHeight(), dp(16)); }
+            @Override public void getOutline(View v, Outline o) { o.setRoundRect(0, 0, v.getWidth(), v.getHeight(), dp(6)); }
         });
         iv.setClipToOutline(true);
         fl.addView(iv, new FrameLayout.LayoutParams(-1, -1));
         TextView label = (vid || pdf) ? new TextView(this) : null;
-        if (vid || pdf) {   // мягкое затемнение снизу под подписью
+        if (vid || pdf) {   // лёгкое затемнение снизу, чтобы подпись читалась
             View scrim = new View(this);
-            GradientDrawable sg = new GradientDrawable(GradientDrawable.Orientation.BOTTOM_TOP, new int[]{0x73000000, 0x00000000});
-            sg.setCornerRadii(new float[]{0, 0, 0, 0, dp(16), dp(16), dp(16), dp(16)});
+            GradientDrawable sg = new GradientDrawable(GradientDrawable.Orientation.BOTTOM_TOP, new int[]{0x59000000, 0x00000000});
+            sg.setCornerRadii(new float[]{0, 0, 0, 0, dp(6), dp(6), dp(6), dp(6)});
             scrim.setBackground(sg);
-            fl.addView(scrim, new FrameLayout.LayoutParams(-1, dp(44), Gravity.BOTTOM));
-        }
-        if (vid) {
-            TextView play = tv("▶", 16, 0xFFFFFFFF, false);
-            play.setGravity(Gravity.CENTER);
-            GradientDrawable g = new GradientDrawable();
-            g.setShape(GradientDrawable.OVAL);
-            g.setColor(0x66000000);
-            g.setStroke(dp(1), 0x66FFFFFF);
-            play.setBackground(g);
-            fl.addView(play, new FrameLayout.LayoutParams(dp(36), dp(36), Gravity.CENTER));
+            fl.addView(scrim, new FrameLayout.LayoutParams(-1, dp(34), Gravity.BOTTOM));
         }
         if (label != null) {
             label.setTextColor(0xFFFFFFFF);
-            label.setTextSize(10);
+            label.setTextSize(11);
             label.setTypeface(boldFace());
-            label.setPadding(dp(6), dp(2), dp(6), dp(2));
-            label.setBackground(round(0x66000000, 8));
-            if (pdf) label.setText("PDF"); else label.setVisibility(View.GONE);
+            label.setShadowLayer(dp(2), 0, 0, 0x99000000);
+            label.setPadding(dp(4), dp(2), dp(4), dp(2));
+            if (vid) {
+                Drawable pi = icon(R.drawable.ic_play, 0xFFFFFFFF);
+                pi.setBounds(0, 0, dp(12), dp(12));
+                label.setCompoundDrawablesRelative(pi, null, null, null);
+                label.setCompoundDrawablePadding(dp(2));
+                label.setGravity(Gravity.CENTER_VERTICAL);
+            }
+            if (pdf) label.setText("PDF");
             FrameLayout.LayoutParams dlp = new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.END);
             dlp.setMargins(0, 0, dp(4), dp(4));
             fl.addView(label, dlp);
         }
         if (it.enc) {
-            TextView lk = tv("🔒", 10, 0xFFFFFFFF, false);
+            TextView lk = tv("🔒", 11, 0xFFFFFFFF, false);
             lk.setGravity(Gravity.CENTER);
-            lk.setBackground(round(0x80000000, 10));
-            FrameLayout.LayoutParams lkp = new FrameLayout.LayoutParams(dp(20), dp(20), Gravity.BOTTOM | Gravity.START);
-            lkp.setMargins(dp(4), 0, 0, dp(4));
+            lk.setBackground(round(0x59000000, 10));
+            FrameLayout.LayoutParams lkp = new FrameLayout.LayoutParams(dp(20), dp(20), Gravity.TOP | Gravity.END);
+            lkp.setMargins(0, dp(4), dp(4), 0);
             fl.addView(lk, lkp);
         }
         loadThumb(it, iv, label);
@@ -1442,7 +1455,7 @@ public class MainActivity extends Activity {
         if (th.bmp != null) iv.setImageBitmap(th.bmp);
         if (label == null) return;
         if (Library.isPdf(it.name)) { if (th.pages > 0) label.setText("PDF · " + th.pages); }
-        else if (th.dur > 0) { label.setText(fmtDur(th.dur)); label.setVisibility(View.VISIBLE); }
+        else if (th.dur > 0) label.setText(fmtDur(th.dur));
     }
 
     private File thumbFile(Library.Item it) {
@@ -1479,7 +1492,9 @@ public class MainActivity extends Activity {
     }
 
     private Thumb makeThumbData(Library.Item it) {
-        return it.enc ? makeEncThumb(it) : thumbFromFile(it, new File(it.path));
+        Thumb th = it.enc ? makeEncThumb(it) : thumbFromFile(it, new File(it.path));
+        if (it.rot != 0 && th.bmp != null && Library.isImage(it.name)) th.bmp = rotated(th.bmp, it.rot);
+        return th;
     }
 
     private Thumb thumbFromFile(Library.Item it, File pf) {
@@ -1559,7 +1574,7 @@ public class MainActivity extends Activity {
                 x.animate().scaleX(0.95f).scaleY(0.95f).setDuration(90).start();
                 st[0] = e.getRawX(); st[1] = e.getRawY(); track[0] = true;
             } else if (a == MotionEvent.ACTION_UP || a == MotionEvent.ACTION_CANCEL) {
-                x.animate().scaleX(1f).scaleY(1f).setDuration(220).setInterpolator(new OvershootInterpolator(2f)).start();
+                x.animate().scaleX(1f).scaleY(1f).setDuration(220).setInterpolator(new DecelerateInterpolator(1.5f)).start();
                 if (a == MotionEvent.ACTION_UP && track[0] && allowSwipe) {
                     float dx = e.getRawX() - st[0], dy = e.getRawY() - st[1];
                     if (dx > dp(90) && dx > Math.abs(dy) * 2.2f) {
@@ -1791,7 +1806,7 @@ public class MainActivity extends Activity {
             File src = new File(it.path), tmp = new File(it.path + ".tmp");
             try {
                 if (enc) {
-                    Thumb th = makeThumbData(it);
+                    Thumb th = thumbFromFile(it, src);
                     if (it.sha.isEmpty()) { String h = Library.sha256(src); it.sha = h == null ? "" : h; }
                     it.size = src.length();
                     try (InputStream in = new FileInputStream(src); OutputStream os = new BufferedOutputStream(new FileOutputStream(tmp), 65536)) {
@@ -1926,15 +1941,8 @@ public class MainActivity extends Activity {
         cell.setOrientation(LinearLayout.VERTICAL);
         FrameLayout th = makeThumb(it);
         if (selection != null && selection.contains(it.id)) {
-            View tint = new View(this);
-            GradientDrawable tg = new GradientDrawable();
-            tg.setCornerRadius(dp(16));
-            tg.setColor((ACCENT & 0x00FFFFFF) | 0x38000000);
-            tg.setStroke(dp(3), ACCENT);
-            tint.setBackground(tg);
-            th.addView(tint, new FrameLayout.LayoutParams(-1, -1));
-            th.setScaleX(0.93f);
-            th.setScaleY(0.93f);
+            th.setScaleX(0.86f);
+            th.setScaleY(0.86f);
             TextView ck = tv("✓", 14, ONACC, true);
             ck.setGravity(Gravity.CENTER);
             GradientDrawable og = new GradientDrawable();
@@ -1942,19 +1950,26 @@ public class MainActivity extends Activity {
             og.setColor(ACCENT);
             og.setStroke(dp(2), 0xFFFFFFFF);
             ck.setBackground(og);
-            FrameLayout.LayoutParams ckp = new FrameLayout.LayoutParams(dp(26), dp(26), Gravity.TOP | Gravity.START);
-            ckp.setMargins(dp(6), dp(6), 0, 0);
+            FrameLayout.LayoutParams ckp = new FrameLayout.LayoutParams(dp(24), dp(24), Gravity.TOP | Gravity.START);
+            ckp.setMargins(dp(5), dp(5), 0, 0);
             th.addView(ck, ckp);
+        } else if (selection != null && !selection.isEmpty()) {   // режим выбора: пустой кружок
+            View oc = new View(this);
+            GradientDrawable og2 = new GradientDrawable();
+            og2.setShape(GradientDrawable.OVAL);
+            og2.setColor(0x33000000);
+            og2.setStroke(dp(2), 0xFFFFFFFF);
+            oc.setBackground(og2);
+            FrameLayout.LayoutParams ocp = new FrameLayout.LayoutParams(dp(22), dp(22), Gravity.TOP | Gravity.START);
+            ocp.setMargins(dp(6), dp(6), 0, 0);
+            th.addView(oc, ocp);
         }
         if (it.fav) {
             TextView hv = tv("♥", 12, 0xFFFFFFFF, true);
             hv.setGravity(Gravity.CENTER);
-            GradientDrawable hg = new GradientDrawable();
-            hg.setShape(GradientDrawable.OVAL);
-            hg.setColor(0xCCE8527E);
-            hv.setBackground(hg);
-            FrameLayout.LayoutParams hlp = new FrameLayout.LayoutParams(dp(22), dp(22), Gravity.TOP | Gravity.END);
-            hlp.setMargins(0, dp(6), dp(6), 0);
+            hv.setBackground(round(0x59000000, 10));
+            FrameLayout.LayoutParams hlp = new FrameLayout.LayoutParams(dp(20), dp(20), Gravity.BOTTOM | Gravity.START);
+            hlp.setMargins(dp(4), 0, 0, dp(4));
             th.addView(hv, hlp);
         }
         cell.addView(th, new LinearLayout.LayoutParams(cw, thumbH));
@@ -1977,7 +1992,7 @@ public class MainActivity extends Activity {
             popId = null;
             cell.setScaleX(0.9f);
             cell.setScaleY(0.9f);
-            cell.animate().scaleX(1f).scaleY(1f).setDuration(280).setInterpolator(new OvershootInterpolator(2.2f)).start();
+            cell.animate().scaleX(1f).scaleY(1f).setDuration(280).setInterpolator(new DecelerateInterpolator(1.5f)).start();
         }
         cell.setOnClickListener(v -> {
             if (selection != null && !selection.isEmpty()) {
@@ -2021,12 +2036,11 @@ public class MainActivity extends Activity {
         if (sw <= 0) sw = getResources().getDisplayMetrics().widthPixels;
         int vh = sv.getHeight();
         if (vh <= 0) vh = getResources().getDisplayMetrics().heightPixels - dp(54) - dp(170);
-        int gap = dp(8);
-        int cw = Math.max(dp(40), (sw - dp(24) - gap * (cols - 1)) / cols);
+        int gap = dp(3);
+        int cw = Math.max(dp(40), (sw - dp(8) - gap * (cols - 1)) / cols);
         int tagLines = !prefs.getBoolean("feed_tags", false) ? 0 : cols >= 3 ? 1 : 2;
         int labelH = (showNames ? dp(20) : 0) + tagBodyH(tagLines) + dp(4);
-        int cellH = cols <= 2 ? Math.max(dp(150), (vh - dp(8) - gap * 2) / 3) : (int) (cw * 1.3f) + labelH;
-        int thumbH = Math.max(dp(70), cellH - labelH);
+        int thumbH = cw;   // квадратные плитки, как в галерее
         final boolean anim = animGrid;
         animGrid = false;
         LinearLayout row = null;
@@ -2054,11 +2068,8 @@ public class MainActivity extends Activity {
     }
 
     private TextView emptyNote(String text) {
-        SpannableString ss = new SpannableString("✨\n" + text);
-        ss.setSpan(new RelativeSizeSpan(2.6f), 0, 1, 0);
-        TextView e = tv("", 14, MUTED, false);
-        e.setText(ss);
-        e.setLineSpacing(dp(4), 1f);
+        TextView e = tv(text, 14, MUTED, false);
+        e.setLineSpacing(dp(3), 1f);
         e.setGravity(Gravity.CENTER);
         e.setPadding(dp(16), dp(32), dp(16), dp(32));
         e.setBackground(panel(14));
@@ -2137,7 +2148,7 @@ public class MainActivity extends Activity {
         feedScroll = new ScrollView(this);
         feedGrid = new LinearLayout(this);
         feedGrid.setOrientation(LinearLayout.VERTICAL);
-        feedGrid.setPadding(dp(12), 0, dp(12), dp(8));
+        feedGrid.setPadding(dp(4), 0, dp(4), dp(8));
         feedScroll.addView(feedGrid);
         FrameLayout feedWrap = new FrameLayout(this);
         feedWrap.addView(feedScroll, new FrameLayout.LayoutParams(-1, -1));
@@ -2162,7 +2173,7 @@ public class MainActivity extends Activity {
             if (show) {
                 upFab.setVisibility(View.VISIBLE);
                 upFab.setScaleX(0f); upFab.setScaleY(0f);
-                upFab.animate().scaleX(1f).scaleY(1f).setDuration(260).setInterpolator(new OvershootInterpolator(2.5f)).start();
+                upFab.animate().scaleX(1f).scaleY(1f).setDuration(260).setInterpolator(new DecelerateInterpolator(1.5f)).start();
             } else {
                 upFab.animate().scaleX(0f).scaleY(0f).setDuration(160).withEndAction(() -> upFab.setVisibility(View.GONE)).start();
             }
@@ -2248,7 +2259,9 @@ public class MainActivity extends Activity {
         LinearLayout tx = new LinearLayout(this);
         tx.setOrientation(LinearLayout.VERTICAL);
         tx.setPadding(dp(12), 0, dp(8), 0);
-        tx.addView(tv("▶ " + t("continue_view"), 14, ACCENT, true));
+        TextView cvt = tv(t("continue_view"), 14, ACCENT, true);
+        startIcon(cvt, R.drawable.ic_play, ACCENT);
+        tx.addView(cvt);
         String sub = li.name;
         int vp = prefs.getInt("vp_" + li.id, 0), pg = prefs.getInt("pg_" + li.id, 0);
         if (Library.isVideo(li.name) && vp > 0) sub += " · " + fmtDur(vp);
@@ -2352,7 +2365,7 @@ public class MainActivity extends Activity {
     }
 
     private TextView cardTitle(String s) {
-        TextView l = tv(s, 12, MUTED, true);
+        TextView l = tv(cap(s), 13, MUTED, true);
         l.setPadding(dp(2), 0, 0, dp(10));
         return l;
     }
@@ -2477,7 +2490,7 @@ public class MainActivity extends Activity {
             }
             LinearLayout c5 = card();
             c5.addView(cardTitle(t("sec_show")));
-            c5.addView(segmented(new String[]{t("show_all"), "♥ " + t("favorites")}, st[2] ? 1 : 0, i -> { st[2] = i == 1; draw[0].run(); }));
+            c5.addView(segmented(new String[]{t("show_all"), t("favorites")}, st[2] ? 1 : 0, i -> { st[2] = i == 1; draw[0].run(); }));
             addCard(holder, c5);
             LinearLayout c3 = card();
             c3.addView(cardTitle(t("sec_match")));
@@ -2485,7 +2498,7 @@ public class MainActivity extends Activity {
             addCard(holder, c3);
             LinearLayout c4 = card();
             c4.addView(cardTitle(t("sec_sort")));
-            c4.addView(segmented(new String[]{t("sort_new"), t("sort_old"), "🎲 " + t("sort_random")}, sortSel[0], i -> { sortSel[0] = i; draw[0].run(); }));
+            c4.addView(segmented(new String[]{t("sort_new"), t("sort_old"), t("sort_random")}, sortSel[0], i -> { sortSel[0] = i; draw[0].run(); }));
             addCard(holder, c4);
         };
         q.addTextChangedListener(new android.text.TextWatcher() {
@@ -2597,7 +2610,7 @@ public class MainActivity extends Activity {
         albumDetailScroll = new ScrollView(this);
         albumGrid = new LinearLayout(this);
         albumGrid.setOrientation(LinearLayout.VERTICAL);
-        albumGrid.setPadding(dp(12), 0, dp(12), dp(8));
+        albumGrid.setPadding(dp(4), 0, dp(4), dp(8));
         albumDetailScroll.addView(albumGrid);
         r.addView(albumDetailScroll, new LinearLayout.LayoutParams(-1, 0, 1));
         albumDetailScroll.addOnLayoutChangeListener((vw, a1, a2, a3, a4, a5, a6, a7, a8) -> {
@@ -2696,7 +2709,7 @@ public class MainActivity extends Activity {
         if (detail) {
             boolean isFav = Library.FAV.equals(albumOpen);
             Library.Album a = isFav ? null : lib.albumById(albumOpen);
-            albumTitle.setText(isFav ? "♥ " + t("favorites") : a.name);
+            albumTitle.setText(isFav ? t("favorites") : a.name);
             albumTitle.setTextSize(24);
             albumRenameBtn.setVisibility(isFav ? View.GONE : View.VISIBLE);
             albumDelBtn.setVisibility(isFav ? View.GONE : View.VISIBLE);
@@ -2710,47 +2723,81 @@ public class MainActivity extends Activity {
         albumTitle.setText(t("tab_albums"));
         albumTitle.setTextSize(30);
         albumListBox.removeAllViews();
-        addFavCard();
-        if (lib.albums.isEmpty()) { albumListBox.addView(emptyNote(t("no_albums")), params(-1, -2)); fxTree(albumListBox); return; }
+        int lw = albumListScroll.getWidth() > 0 ? albumListScroll.getWidth() : getResources().getDisplayMetrics().widthPixels;
+        int agap = dp(12);
+        int acw = Math.max(dp(80), (lw - dp(32) - agap) / 2);
+        ArrayList<View> tiles = new ArrayList<>();
+        ArrayList<Library.Item> favs = lib.inAlbum(Library.FAV);
+        tiles.add(albumTile(favs.isEmpty() ? null : favs.get(0), "♥", t("favorites"), favs.size(), false, false, acw, v -> {
+            if (!albumSelA.isEmpty()) return;
+            albumSelI.clear();
+            albumOpen = Library.FAV;
+            animGrid = true;
+            renderAlbums();
+        }, null));
         for (final Library.Album a : new ArrayList<>(lib.albums)) {
             ArrayList<Library.Item> its = lib.inAlbum(a.id);
             final boolean picked = albumSelA.contains(a.id);
-            LinearLayout card = new LinearLayout(this);
-            card.setGravity(Gravity.CENTER_VERTICAL);
-            card.setPadding(dp(10), dp(9), dp(12), dp(9));
-            card.setBackground(picked ? round(blend(PANEL, ACCENT, 0.3f), 20) : panel(20));
-            LinearLayout.LayoutParams cp = params(-1, -2);
-            cp.bottomMargin = dp(8);
-            albumListBox.addView(card, cp);
-            View cover;
-            if (its.isEmpty()) {
-                TextView ph = tv("▦", 24, MUTED, false);
-                ph.setGravity(Gravity.CENTER);
-                ph.setBackground(round(FIELD, 10));
-                cover = ph;
-            } else cover = makeThumb(its.get(0));
-            card.addView(stack(cover, ACCENT), new LinearLayout.LayoutParams(dp(86), dp(84)));
-            LinearLayout info = new LinearLayout(this);
-            info.setOrientation(LinearLayout.VERTICAL);
-            info.setPadding(dp(12), 0, dp(4), 0);
-            TextView nm = tv(a.name, 15, FG, true);
-            nm.setMaxLines(2);
-            nm.setEllipsize(TextUtils.TruncateAt.END);
-            info.addView(nm);
-            info.addView(tv(tf("items_n", its.size()), 12, MUTED, false));
-            card.addView(info, new LinearLayout.LayoutParams(0, -2, 1));
-            if (selMode) {
-                TextView ck = tv(picked ? "☑" : "☐", 22, picked ? ACCENT : FG, false);
-                ck.setGravity(Gravity.CENTER);
-                card.addView(ck, new LinearLayout.LayoutParams(dp(36), dp(48)));
-            }
-            card.setOnClickListener(v -> {
+            tiles.add(albumTile(its.isEmpty() ? null : its.get(0), "▣", a.name, its.size(), picked, selMode, acw, v -> {
                 if (!albumSelA.isEmpty()) toggleAlbumSel(a.id);
                 else { albumSelI.clear(); albumOpen = a.id; animGrid = true; renderAlbums(); }
-            });
-            card.setOnLongClickListener(v -> { toggleAlbumSel(a.id); return true; });
+            }, v -> { buzz(v, HapticFeedbackConstants.LONG_PRESS); toggleAlbumSel(a.id); return true; }));
         }
+        LinearLayout arow = null;
+        for (int i = 0; i < tiles.size(); i++) {
+            if (i % 2 == 0) {
+                arow = new LinearLayout(this);
+                LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(-1, -2);
+                rp.bottomMargin = dp(16);
+                albumListBox.addView(arow, rp);
+            }
+            LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(acw, -2);
+            if (i % 2 == 1) tp.setMarginStart(agap);
+            arow.addView(tiles.get(i), tp);
+        }
+        if (lib.albums.isEmpty()) albumListBox.addView(emptyNote(t("no_albums")), params(-1, -2));
         fxTree(albumListBox);
+    }
+
+    // Плитка альбома: квадратная обложка, под ней название и число файлов
+    private View albumTile(Library.Item cover, String glyph, String name, int count, boolean picked, boolean selMode, int size,
+                           View.OnClickListener click, View.OnLongClickListener longClick) {
+        LinearLayout t = new LinearLayout(this);
+        t.setOrientation(LinearLayout.VERTICAL);
+        FrameLayout c;
+        if (cover != null) c = makeThumb(cover);
+        else {
+            c = new FrameLayout(this);
+            c.setBackground(round(FIELD, 6));
+            TextView ph = tv(glyph, 30, MUTED, false);
+            ph.setGravity(Gravity.CENTER);
+            c.addView(ph, new FrameLayout.LayoutParams(-1, -1));
+        }
+        if (selMode) {
+            TextView ck = tv(picked ? "✓" : "", 13, ONACC, true);
+            ck.setGravity(Gravity.CENTER);
+            GradientDrawable og = new GradientDrawable();
+            og.setShape(GradientDrawable.OVAL);
+            og.setColor(picked ? ACCENT : 0x33000000);
+            og.setStroke(dp(2), 0xFFFFFFFF);
+            ck.setBackground(og);
+            FrameLayout.LayoutParams ckp = new FrameLayout.LayoutParams(dp(24), dp(24), Gravity.TOP | Gravity.START);
+            ckp.setMargins(dp(6), dp(6), 0, 0);
+            c.addView(ck, ckp);
+        }
+        if (picked) { c.setScaleX(0.9f); c.setScaleY(0.9f); }
+        t.addView(c, new LinearLayout.LayoutParams(size, size));
+        TextView nm = tv(name, 14, FG, true);
+        nm.setSingleLine(true);
+        nm.setEllipsize(TextUtils.TruncateAt.END);
+        nm.setPadding(dp(2), dp(8), dp(2), 0);
+        t.addView(nm, new LinearLayout.LayoutParams(-1, -2));
+        TextView cn = tv(tf("items_n", count), 12, MUTED, false);
+        cn.setPadding(dp(2), dp(1), dp(2), 0);
+        t.addView(cn, new LinearLayout.LayoutParams(-1, -2));
+        t.setOnClickListener(click);
+        if (longClick != null) t.setOnLongClickListener(longClick);
+        return t;
     }
 
     // Обложка «стопкой»: за фото выглядывают ещё две карточки
@@ -3021,23 +3068,21 @@ public class MainActivity extends Activity {
         upButtons.setPadding(dp(16), dp(8), dp(16), dp(8));
         LinearLayout hero = new LinearLayout(this);
         hero.setGravity(Gravity.CENTER_VERTICAL);
-        hero.setPadding(dp(16), dp(16), dp(16), dp(16));
-        hero.setBackground(accentBg(24));
+        hero.setPadding(dp(16), dp(14), dp(16), dp(14));
+        hero.setBackground(accentBg(14));
         glow(hero, ACCENT, 8);
         ImageView hic = new ImageView(this);
         hic.setImageResource(R.drawable.nav_upload);
         hic.setColorFilter(ONACC);
-        hic.setPadding(dp(12), dp(12), dp(12), dp(12));
+        hic.setPadding(dp(2), dp(2), dp(2), dp(2));
         GradientDrawable hcg = new GradientDrawable();
         hcg.setShape(GradientDrawable.OVAL);
         hcg.setColor((ONACC & 0x00FFFFFF) | 0x2E000000);
-        hic.setBackground(hcg);
-        hero.addView(hic, new LinearLayout.LayoutParams(dp(54), dp(54)));
+        hero.addView(hic, new LinearLayout.LayoutParams(dp(28), dp(28)));
         LinearLayout htx = new LinearLayout(this);
         htx.setOrientation(LinearLayout.VERTICAL);
         htx.setPadding(dp(14), 0, 0, 0);
-        TextView ht = tv(t("hero_add"), 17, ONACC, true);
-        ht.setTypeface(dispFace());
+        TextView ht = tv(t("hero_add"), 15, ONACC, true);
         htx.addView(ht);
         TextView hs = tv(t("hero_add_sub"), 12.5f, (ONACC & 0x00FFFFFF) | 0xCC000000, false);
         hs.setPadding(0, dp(2), 0, 0);
@@ -3054,7 +3099,7 @@ public class MainActivity extends Activity {
             LinearLayout tile = new LinearLayout(this);
             tile.setGravity(Gravity.CENTER_VERTICAL);
             tile.setPadding(dp(14), 0, dp(10), 0);
-            tile.setBackground(panel(18));
+            tile.setBackground(round(BTN, 14));
             ImageView ti = new ImageView(this);
             ti.setImageResource(icRes[k]);
             ti.setColorFilter(ACCENT);
@@ -3494,19 +3539,6 @@ public class MainActivity extends Activity {
         });
     }
 
-    private TextView topBtn(String glyph, float size) {
-        TextView b = tv(glyph, size, 0xFFFFFFFF, true);
-        b.setGravity(Gravity.CENTER);
-        GradientDrawable g = new GradientDrawable();
-        g.setShape(GradientDrawable.OVAL);
-        g.setColor(TAG_GREEN);
-        g.setStroke(dp(1), 0x55FFFFFF);
-        b.setBackground(g);
-        b.setElevation(dp(4));
-        pressFx(b);
-        return b;
-    }
-
     private TextView circleBtn(String glyph, float size) {
         TextView b = tv(glyph, size, 0xFFFFFFFF, false);
         b.setGravity(Gravity.CENTER);
@@ -3516,6 +3548,73 @@ public class MainActivity extends Activity {
         b.setBackground(g);
         pressFx(b);
         return b;
+    }
+
+    // ---------- Просмотр: строгий, «как в галерее» ----------
+    private TextView vIcon(String glyph, float size) {
+        TextView b = tv(glyph, size, 0xFFFFFFFF, false);
+        b.setGravity(Gravity.CENTER);
+        pressFx(b);
+        return b;
+    }
+
+    private LinearLayout vAction(String glyph, String label) {
+        LinearLayout a = new LinearLayout(this);
+        a.setOrientation(LinearLayout.VERTICAL);
+        a.setGravity(Gravity.CENTER);
+        a.setPadding(dp(4), dp(6), dp(4), dp(4));
+        TextView ic = tv(glyph, 20, 0xFFFFFFFF, false);
+        ic.setGravity(Gravity.CENTER);
+        a.addView(ic, new LinearLayout.LayoutParams(dp(28), dp(28)));
+        TextView l = tv(label, 11, 0xCCFFFFFF, false);
+        l.setSingleLine(true);
+        l.setPadding(0, dp(2), 0, 0);
+        a.addView(l, new LinearLayout.LayoutParams(-2, -2));
+        pressFx(a);
+        return a;
+    }
+
+    private TextView vChip(String text) {
+        TextView c = tv(text, 13, 0xFFFFFFFF, false);
+        c.setPadding(dp(12), dp(6), dp(12), dp(6));
+        GradientDrawable g = new GradientDrawable();
+        g.setCornerRadius(dp(16));
+        g.setColor(0x00000000);
+        g.setStroke(Math.max(1, dp(1)), 0x59FFFFFF);
+        c.setBackground(g);
+        return c;
+    }
+
+    private TextView vLabel(String s) {
+        TextView l = tv(cap(s), 13, 0x8CFFFFFF, true);
+        l.setPadding(0, dp(18), 0, dp(8));
+        return l;
+    }
+
+    private void fade(View v, boolean show) {
+        if (v == null) return;
+        v.animate().cancel();
+        if (show) {
+            if (v.getVisibility() != View.VISIBLE) { v.setAlpha(0f); v.setVisibility(View.VISIBLE); }
+            v.animate().alpha(1f).setDuration(160).start();
+        } else if (v.getVisibility() == View.VISIBLE) {
+            v.animate().alpha(0f).setDuration(160).withEndAction(() -> v.setVisibility(View.INVISIBLE)).start();
+        }
+    }
+
+    private Bitmap rotated(Bitmap b, int deg) {
+        if (b == null || deg % 360 == 0) return b;
+        Matrix m = new Matrix();
+        m.postRotate(deg);
+        try { return Bitmap.createBitmap(b, 0, 0, b.getWidth(), b.getHeight(), m, true); } catch (Throwable e) { return b; }
+    }
+
+    // Соседний кадр для листания: фото побольше, видео и PDF — миниатюра
+    private Bitmap peekBitmap(Library.Item it) {
+        if (!it.enc && Library.isImage(it.name)) return rotated(decodeSampled(it.path, 1280), it.rot);
+        Thumb c = thumbCache.get(it.path);
+        if (c == null) { c = makeThumbData(it); thumbCache.put(it.path, c); }
+        return c.bmp;
     }
 
     private boolean hits(View v, MotionEvent e) {
@@ -3529,224 +3628,341 @@ public class MainActivity extends Activity {
 
     private void openViewer(final ArrayList<Library.Item> list, int start) {
         if (list.isEmpty()) return;
-        final int[] idx = {start};
+        final int SW = getResources().getDisplayMetrics().widthPixels;
+        final int SH = getResources().getDisplayMetrics().heightPixels;
+        final int PG = SW + dp(16);   // шаг листания: кадр + зазор
+        final int[] idx = {Math.max(0, Math.min(start, list.size() - 1))};
         final int[] token = {0};
         final Runnable[] show = new Runnable[1];
         final Runnable[] pageShow = new Runnable[1];
         final IntCb[] stepPage = new IntCb[1];
-        final MediaController[] mcRef = new MediaController[1];
+        final IntCb[] settle = new IntCb[1];
+        final FloatCb[] pageTo = new FloatCb[1];
         final ZoomImageView[] zoomRef = new ZoomImageView[1];
         final VideoView[] vvRef = new VideoView[1];
+        final MediaPlayer[] mpRef = new MediaPlayer[1];
         final ScrollView[] vsRef = new ScrollView[1];
         final int[][] topsRef = new int[1][];
         final String[] curId = {null};
-        final boolean[] pdfMode = {false};
-        final boolean[] videoMode = {false};
+        final boolean[] pdfMode = {false}, videoMode = {false}, chromeOn = {true}, infoOn = {false}, seeking = {false};
         final int[] mmode = {Math.max(0, Math.min(2, prefs.getInt("mmode", 0)))};   // 0 слева направо, 1 справа налево, 2 вертикальная лента
-        final View[] chrome = new View[4];   // верх, низ, стрелка назад, стрелка вперёд
-        final boolean[] tagsOpen = {false};
-        final Runnable[] tagsUpd = new Runnable[1];
-        final Runnable[] saveVp = new Runnable[1];
-        final int[] slide = {0};
-        final View[] tagsRef = new View[1];
-        final TextView[] flashRef = new TextView[1];
+        final Runnable[] saveVp = new Runnable[1], setChrome = new Runnable[1], openInfo = new Runnable[1], closeInfo = new Runnable[1],
+                fillInfo = new Runnable[1], loadPeeks = new Runnable[1], togglePlay = new Runnable[1], armHide = new Runnable[1];
+        final Bitmap[] carry = new Bitmap[1];
+        final HashMap<String, Bitmap> pc = new HashMap<>();   // кадры текущего и соседних файлов
+        final View[] vr = new View[9];   // 0 media, 1 root, 2 top, 3 bottom, 4 info, 5 prev, 6 next, 7 flash, 8 play
         final PdfHolder pdf = new PdfHolder();
+
         final GestureDetector gd = new GestureDetector(this, new GestureDetector.SimpleOnGestureListener() {
+            // В манге по страницам свайп листает страницы
             @Override public boolean onFling(MotionEvent e1, MotionEvent e2, float vx, float vy) {
-                if (e1 == null || e2 == null) return false;
-                float dx = e2.getX() - e1.getX(), dy = e2.getY() - e1.getY();
-                if (Math.abs(dy) > dp(60) && Math.abs(dy) > Math.abs(dx) * 1.5f && hits(chrome[1], e1) && !hits(tagsRef[0], e1)) {
-                    tagsOpen[0] = dy < 0;   // свайп вверх по нижней панели поднимает теги, вниз — опускает
-                    tagsUpd[0].run();
-                    return true;
-                }
+                if (e1 == null || e2 == null || !pdfMode[0] || mmode[0] == 2 || infoOn[0]) return false;
                 if (zoomRef[0] != null && zoomRef[0].isZoomed()) return false;
-                if (Math.abs(dx) > dp(80) && Math.abs(dx) > Math.abs(dy) * 1.5f) {
-                    slide[0] = dx < 0 ? 1 : -1;
-                    if (pdfMode[0] && mmode[0] != 2) {
-                        boolean rtl = mmode[0] == 1;
-                        stepPage[0].on(((dx < 0) != rtl) ? 1 : -1);
-                        return true;
-                    }
-                    if (list.size() < 2) return false;
-                    idx[0] = (idx[0] + (dx < 0 ? 1 : list.size() - 1)) % list.size();
-                    show[0].run();
+                if (hits(vr[2], e1) || hits(vr[3], e1)) return false;
+                float dx = e2.getX() - e1.getX(), dy = e2.getY() - e1.getY();
+                if (Math.abs(dx) > dp(70) && Math.abs(dx) > Math.abs(dy) * 1.5f) {
+                    boolean rtl = mmode[0] == 1;
+                    stepPage[0].on(((dx < 0) != rtl) ? 1 : -1);
                     return true;
                 }
                 return false;
             }
+
             // Двойное касание по видео: слева −10 с, справа +10 с
             @Override public boolean onDoubleTap(MotionEvent e) {
                 VideoView vv = vvRef[0];
-                if (!videoMode[0] || vv == null) return false;
-                for (View c : chrome) if (hits(c, e)) return false;
-                int[] loc = new int[2];
-                vv.getLocationOnScreen(loc);
-                if (e.getRawY() > loc[1] + vv.getHeight() * 0.8f) return false;
-                boolean right = e.getRawX() > loc[0] + vv.getWidth() / 2f;
+                if (!videoMode[0] || vv == null || infoOn[0]) return false;
+                if (hits(vr[2], e) || hits(vr[3], e) || hits(vr[8], e)) return false;
+                boolean right = e.getRawX() > SW / 2f;
                 try {
                     int dur = vv.getDuration();
                     int np = vv.getCurrentPosition() + (right ? 10000 : -10000);
                     np = Math.max(0, dur > 0 ? Math.min(dur - 300, np) : np);
                     vv.seekTo(np);
                 } catch (Exception ignored) { }
-                TextView fl = flashRef[0];
-                if (fl != null) {
-                    fl.setText(right ? "⏩  +10" : "−10  ⏪");
-                    fl.animate().cancel();
-                    fl.setAlpha(1f);
-                    fl.animate().alpha(0f).setStartDelay(500).setDuration(350).start();
-                }
+                TextView fl = (TextView) vr[7];
+                fl.setText(right ? "+10" : "-10");
+                fl.setTranslationX((right ? 1 : -1) * SW / 4f);
+                fl.animate().cancel();
+                fl.setAlpha(1f);
+                fl.animate().alpha(0f).setStartDelay(450).setDuration(300).start();
                 return true;
             }
 
-            // Одиночное касание по картинке прячет и показывает панели
+            // Касание показывает и прячет панели
             @Override public boolean onSingleTapConfirmed(MotionEvent e) {
-                if (videoMode[0]) return false;
-                for (View c : chrome) if (hits(c, e)) return false;
-                boolean showIt = chrome[0].getVisibility() != View.VISIBLE;
-                fadeVis(chrome[0], showIt);
-                fadeVis(chrome[1], showIt);
-                if (list.size() > 1) { fadeVis(chrome[2], showIt); fadeVis(chrome[3], showIt); }
+                if (infoOn[0]) { if (!hits(vr[4], e)) closeInfo[0].run(); return true; }
+                if (hits(vr[2], e) || hits(vr[3], e) || hits(vr[8], e)) return false;
+                chromeOn[0] = !chromeOn[0];
+                setChrome[0].run();
                 return true;
             }
         });
-        final View[] dragRefs = new View[2];   // media, root
+
         final Dialog dialog = new Dialog(this, android.R.style.Theme_Black_NoTitleBar_Fullscreen) {
             float x0, y0;
-            boolean cand, drag;
+            boolean cand;
+            int mode;   // 0 нет, 1 листание, 2 закрытие, 3 открыть сведения, 4 закрыть сведения
+            VelocityTracker vt;
 
             @Override public boolean dispatchTouchEvent(MotionEvent ev) {
                 gd.onTouchEvent(ev);
-                if (dragTouch(ev)) return true;
+                if (drag(ev)) return true;
                 return super.dispatchTouchEvent(ev);
             }
 
-            // Свайп вниз по фото закрывает просмотр
-            private boolean dragTouch(MotionEvent ev) {
-                View m = dragRefs[0], root = dragRefs[1];
+            @Override public void onWindowFocusChanged(boolean hasFocus) {
+                super.onWindowFocusChanged(hasFocus);
+                if (hasFocus && infoOn[0] && fillInfo[0] != null) fillInfo[0].run();
+            }
+
+            @Override public void onBackPressed() {
+                if (infoOn[0]) closeInfo[0].run(); else super.onBackPressed();
+            }
+
+            private void cancelKids(MotionEvent ev) {
+                MotionEvent c = MotionEvent.obtain(ev);
+                c.setAction(MotionEvent.ACTION_CANCEL);
+                super.dispatchTouchEvent(c);
+                c.recycle();
+            }
+
+            private boolean drag(MotionEvent ev) {
+                View m = vr[0], root = vr[1];
                 if (m == null || root == null) return false;
                 int a = ev.getActionMasked();
                 if (a == MotionEvent.ACTION_DOWN) {
-                    x0 = ev.getRawX(); y0 = ev.getRawY(); drag = false;
-                    cand = !(zoomRef[0] != null && zoomRef[0].isZoomed()) && vsRef[0] == null && !hits(chrome[0], ev) && !hits(chrome[1], ev);
+                    x0 = ev.getRawX(); y0 = ev.getRawY(); mode = 0;
+                    if (vt != null) vt.recycle();
+                    vt = VelocityTracker.obtain();
+                    vt.addMovement(ev);
+                    boolean zoomed = zoomRef[0] != null && zoomRef[0].isZoomed();
+                    boolean onSheet = infoOn[0] && hits(vr[4], ev);
+                    boolean onHandle = false;
+                    if (onSheet) {
+                        int[] loc = new int[2];
+                        vr[4].getLocationOnScreen(loc);
+                        onHandle = ev.getRawY() < loc[1] + dp(44);
+                    }
+                    cand = !zoomed && !hits(vr[2], ev) && !hits(vr[3], ev) && (!onSheet || onHandle);
                     return false;
                 }
-                if (a == MotionEvent.ACTION_POINTER_DOWN) { cand = false; if (!drag) return false; }
-                float dy = ev.getRawY() - y0, dx = ev.getRawX() - x0;
-                float h = Math.max(1, root.getHeight());
-                if (a == MotionEvent.ACTION_MOVE && cand && !drag && dy > dp(26) && dy > Math.abs(dx) * 1.7f) {
-                    drag = true;
-                    MotionEvent c = MotionEvent.obtain(ev);
-                    c.setAction(MotionEvent.ACTION_CANCEL);
-                    super.dispatchTouchEvent(c);
-                    c.recycle();
+                if (vt != null) vt.addMovement(ev);
+                if (a == MotionEvent.ACTION_POINTER_DOWN && mode == 0) { cand = false; return false; }
+                float dx = ev.getRawX() - x0, dy = ev.getRawY() - y0;
+                if (a == MotionEvent.ACTION_MOVE && cand && mode == 0) {
+                    int slop = dp(12);
+                    if (Math.abs(dx) > slop && Math.abs(dx) > Math.abs(dy) * 1.3f) {
+                        if (!infoOn[0] && list.size() > 1 && (!pdfMode[0] || vsRef[0] != null)) mode = 1;
+                        else cand = false;
+                    } else if (Math.abs(dy) > slop && Math.abs(dy) > Math.abs(dx) * 1.3f) {
+                        if (infoOn[0]) { if (dy > 0) mode = 4; else cand = false; }
+                        else if (vsRef[0] != null) cand = false;
+                        else mode = dy > 0 ? 2 : 3;
+                    }
+                    if (mode != 0) {
+                        cancelKids(ev);
+                        x0 = ev.getRawX(); y0 = ev.getRawY();
+                        dx = 0; dy = 0;
+                    }
                 }
-                if (!drag) return false;
+                if (mode == 0) return false;
+                float h = Math.max(1, root.getHeight());
                 if (a == MotionEvent.ACTION_MOVE) {
-                    float d = Math.max(0, dy);
-                    float p = Math.min(1f, d / (h * 0.55f));
-                    m.setTranslationY(d);
-                    m.setTranslationX(dx * 0.4f);
-                    m.setScaleX(1f - p * 0.22f);
-                    m.setScaleY(1f - p * 0.22f);
-                    if (root.getBackground() != null) root.getBackground().setAlpha((int) (255 * (1f - p * 0.85f)));
-                    for (View c : chrome) if (c != null) c.setAlpha(Math.max(0f, 1f - p * 3f));
+                    if (mode == 1) {
+                        float d = dx;
+                        if ((idx[0] == 0 && d > 0) || (idx[0] == list.size() - 1 && d < 0)) d *= 0.3f;
+                        pageTo[0].on(d);
+                    } else if (mode == 2) {
+                        float d = Math.max(0, dy), p = Math.min(1f, d / (h * 0.55f));
+                        m.setTranslationY(d);
+                        m.setTranslationX(dx * 0.4f);
+                        m.setScaleX(1f - p * 0.2f);
+                        m.setScaleY(1f - p * 0.2f);
+                        if (root.getBackground() != null) root.getBackground().setAlpha((int) (255 * (1f - p * 0.85f)));
+                        if (chromeOn[0]) { float ca = Math.max(0f, 1f - p * 3f); vr[2].setAlpha(ca); vr[3].setAlpha(ca); }
+                    } else if (mode == 3) {
+                        m.setTranslationY(Math.max(-dp(120), Math.min(0, dy)) * 0.5f);
+                    } else if (mode == 4) {
+                        vr[4].setTranslationY(Math.max(0, dy));
+                    }
                 } else if (a == MotionEvent.ACTION_UP || a == MotionEvent.ACTION_CANCEL) {
-                    drag = false;
-                    if (dy > dp(130)) {
-                        m.animate().translationY(h).alpha(0f).setDuration(200).withEndAction(this::dismiss).start();
-                    } else {
-                        m.animate().translationY(0f).translationX(0f).scaleX(1f).scaleY(1f).setDuration(280).setInterpolator(new OvershootInterpolator(1.6f)).start();
-                        if (root.getBackground() != null) root.getBackground().setAlpha(255);
-                        for (View c : chrome) if (c != null) c.animate().alpha(1f).setDuration(200).start();
+                    float vx = 0, vy = 0;
+                    if (vt != null) { vt.computeCurrentVelocity(1000); vx = vt.getXVelocity(); vy = vt.getYVelocity(); }
+                    int md = mode;
+                    mode = 0;
+                    if (md == 1) {
+                        int dir = 0;
+                        if (dx < 0 && (dx < -SW * 0.2f || vx < -dp(500)) && idx[0] < list.size() - 1) dir = 1;
+                        else if (dx > 0 && (dx > SW * 0.2f || vx > dp(500)) && idx[0] > 0) dir = -1;
+                        settle[0].on(dir);
+                    } else if (md == 2) {
+                        if (dy > dp(130) || vy > dp(900)) m.animate().translationY(h).alpha(0f).setDuration(200).withEndAction(this::dismiss).start();
+                        else {
+                            m.animate().translationY(0f).translationX(0f).scaleX(1f).scaleY(1f).setDuration(240).setInterpolator(new DecelerateInterpolator(1.5f)).start();
+                            if (root.getBackground() != null) root.getBackground().setAlpha(255);
+                            if (chromeOn[0]) { vr[2].animate().alpha(1f).setDuration(180).start(); vr[3].animate().alpha(1f).setDuration(180).start(); }
+                        }
+                    } else if (md == 3) {
+                        if (dy < -dp(40) || vy < -dp(500)) openInfo[0].run();
+                        else m.animate().translationY(0f).setDuration(200).start();
+                    } else if (md == 4) {
+                        if (dy > dp(60) || vy > dp(600)) closeInfo[0].run();
+                        else vr[4].animate().translationY(0f).setDuration(200).start();
                     }
                 }
                 return true;
             }
         };
-        final FrameLayout media = new FrameLayout(this);
-        final FrameLayout rootF = new FrameLayout(this);
-        dragRefs[0] = media;
-        dragRefs[1] = rootF;
-        rootF.setBackgroundColor(0xFF000000);
-        rootF.addView(media, new FrameLayout.LayoutParams(-1, -1));
-        final TextView flash = tv("", 22, 0xFFFFFFFF, true);
-        flash.setPadding(dp(22), dp(12), dp(22), dp(12));
-        flash.setBackground(round(0xB0000000, 28));
-        flash.setAlpha(0f);
-        flashRef[0] = flash;
-        rootF.addView(flash, new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER));
 
-        // Верхняя панель: закрыть, счётчик, избранное, удалить
+        // ----- сцена: соседние кадры по бокам, текущий в центре
+        final FrameLayout rootF = new FrameLayout(this);
+        rootF.setBackground(new ColorDrawable(0xFF000000));
+        final ImageView prevPeek = new ImageView(this), nextPeek = new ImageView(this);
+        for (ImageView pk : new ImageView[]{prevPeek, nextPeek}) {
+            pk.setScaleType(ImageView.ScaleType.FIT_CENTER);
+            rootF.addView(pk, new FrameLayout.LayoutParams(-1, -1));
+        }
+        prevPeek.setTranslationX(-PG);
+        nextPeek.setTranslationX(PG);
+        final FrameLayout media = new FrameLayout(this);
+        rootF.addView(media, new FrameLayout.LayoutParams(-1, -1));
+        final TextView flash = tv("", 20, 0xFFFFFFFF, true);
+        flash.setGravity(Gravity.CENTER);
+        GradientDrawable flg = new GradientDrawable();
+        flg.setShape(GradientDrawable.OVAL);
+        flg.setColor(0x80000000);
+        flash.setBackground(flg);
+        flash.setAlpha(0f);
+        rootF.addView(flash, new FrameLayout.LayoutParams(dp(76), dp(76), Gravity.CENTER));
+        final TextView playB = tv("▶", 30, 0xFFFFFFFF, false);
+        playB.setGravity(Gravity.CENTER);
+        GradientDrawable pbg = new GradientDrawable();
+        pbg.setShape(GradientDrawable.OVAL);
+        pbg.setColor(0x66000000);
+        playB.setBackground(pbg);
+        playB.setVisibility(View.INVISIBLE);
+        rootF.addView(playB, new FrameLayout.LayoutParams(dp(68), dp(68), Gravity.CENTER));
+        vr[0] = media; vr[1] = rootF; vr[5] = prevPeek; vr[6] = nextPeek; vr[7] = flash; vr[8] = playB;
+
+        // ----- верхняя строка: назад, дата и номер, избранное, удалить
         final LinearLayout top = new LinearLayout(this);
         top.setGravity(Gravity.CENTER_VERTICAL);
-        top.setPadding(dp(12), dp(14), dp(12), dp(26));
-        top.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, new int[]{0xCC000000, 0x00000000}));
-        TextView close = topBtn("✕", 20);
-        TextView del = topBtn("🗑", 20);
-        final TextView favB = topBtn("♡", 24);
-        final TextView counter = tv("", 13, 0xFFFFFFFF, true);
-        counter.setGravity(Gravity.CENTER);
-        counter.setPadding(dp(14), dp(7), dp(14), dp(7));
-        counter.setBackground(round(TAG_GREEN, 22));
-        top.addView(close, new LinearLayout.LayoutParams(dp(50), dp(50)));
-        top.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1));
-        top.addView(counter, new LinearLayout.LayoutParams(-2, -2));
-        top.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1));
-        LinearLayout.LayoutParams fbp = new LinearLayout.LayoutParams(dp(50), dp(50));
-        fbp.setMarginEnd(dp(10));
-        top.addView(favB, fbp);
-        top.addView(del, new LinearLayout.LayoutParams(dp(50), dp(50)));
+        top.setPadding(dp(4), dp(8), dp(8), dp(22));
+        top.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, new int[]{0x99000000, 0x00000000}));
+        TextView back = vIcon("←", 22);
+        top.addView(back, new LinearLayout.LayoutParams(dp(48), dp(48)));
+        LinearLayout ttl = new LinearLayout(this);
+        ttl.setOrientation(LinearLayout.VERTICAL);
+        ttl.setPadding(dp(4), 0, dp(4), 0);
+        final TextView dateTv = tv("", 15, 0xFFFFFFFF, true);
+        dateTv.setSingleLine(true);
+        dateTv.setEllipsize(TextUtils.TruncateAt.END);
+        final TextView subTv = tv("", 12, 0xB3FFFFFF, false);
+        subTv.setSingleLine(true);
+        ttl.addView(dateTv);
+        ttl.addView(subTv);
+        top.addView(ttl, new LinearLayout.LayoutParams(0, -2, 1));
+        final TextView favB = vIcon("♡", 22);
+        final TextView delB = vIcon("🗑", 22);
+        top.addView(favB, new LinearLayout.LayoutParams(dp(48), dp(48)));
+        top.addView(delB, new LinearLayout.LayoutParams(dp(48), dp(48)));
         rootF.addView(top, new FrameLayout.LayoutParams(-1, -2, Gravity.TOP));
+        vr[2] = top;
 
-        // Стрелки по бокам
-        TextView prev = circleBtn("‹", 26), next = circleBtn("›", 26);
-        FrameLayout.LayoutParams plp = new FrameLayout.LayoutParams(dp(44), dp(44), Gravity.CENTER_VERTICAL | Gravity.START);
-        plp.setMarginStart(dp(10));
-        FrameLayout.LayoutParams nlp = new FrameLayout.LayoutParams(dp(44), dp(44), Gravity.CENTER_VERTICAL | Gravity.END);
-        nlp.setMarginEnd(dp(10));
-        rootF.addView(prev, plp);
-        rootF.addView(next, nlp);
-
-        // Нижняя панель: страницы PDF, имя, детали, окошко тегов
+        // ----- нижняя панель: плеер / страницы PDF / действия
         final LinearLayout bottom = new LinearLayout(this);
         bottom.setOrientation(LinearLayout.VERTICAL);
-        bottom.setPadding(dp(18), dp(16), dp(18), dp(20));
-        GradientDrawable bbg = new GradientDrawable();
-        bbg.setColor(0xE6101114);
-        float br = dp(24);
-        bbg.setCornerRadii(new float[]{br, br, br, br, 0, 0, 0, 0});
-        bottom.setBackground(bbg);
+        bottom.setPadding(dp(8), dp(28), dp(8), dp(8));
+        bottom.setBackground(new GradientDrawable(GradientDrawable.Orientation.BOTTOM_TOP, new int[]{0xB3000000, 0x00000000}));
+        final LinearLayout vbar = new LinearLayout(this);
+        vbar.setGravity(Gravity.CENTER_VERTICAL);
+        vbar.setPadding(dp(8), 0, dp(4), dp(4));
+        final TextView curT = tv("0:00", 12, 0xFFFFFFFF, false);
+        curT.setMinWidth(dp(38));
+        final SeekBar seek = new SeekBar(this);
+        seek.setProgressTintList(ColorStateList.valueOf(0xFFFFFFFF));
+        seek.setProgressBackgroundTintList(ColorStateList.valueOf(0x66FFFFFF));
+        seek.setThumbTintList(ColorStateList.valueOf(0xFFFFFFFF));
+        seek.setPadding(dp(12), dp(10), dp(12), dp(10));
+        final TextView durT = tv("0:00", 12, 0xB3FFFFFF, false);
+        durT.setMinWidth(dp(38));
+        durT.setGravity(Gravity.END);
+        final TextView speedB = vChip("1×");
+        speedB.setTextSize(12);
+        speedB.setPadding(dp(10), dp(4), dp(10), dp(4));
+        pressFx(speedB);
+        vbar.addView(curT, new LinearLayout.LayoutParams(-2, -2));
+        vbar.addView(seek, new LinearLayout.LayoutParams(0, -2, 1));
+        vbar.addView(durT, new LinearLayout.LayoutParams(-2, -2));
+        LinearLayout.LayoutParams sbp = new LinearLayout.LayoutParams(-2, -2);
+        sbp.setMarginStart(dp(10));
+        vbar.addView(speedB, sbp);
+        vbar.setVisibility(View.GONE);
+        bottom.addView(vbar, new LinearLayout.LayoutParams(-1, -2));
 
         final LinearLayout pdfBar = new LinearLayout(this);
         pdfBar.setGravity(Gravity.CENTER);
-        TextView pPrev = viewerBtn("◀"), pNext = viewerBtn("▶");
-        final TextView modeBtn = viewerBtn("→");
-        final TextView pageTxt = tv("", 14, 0xFFF0F0F4, true);
+        TextView pPrev = vIcon("‹", 24), pNext = vIcon("›", 24);
+        final TextView modeBtn = tv("→", 18, 0xFFFFFFFF, false);
+        modeBtn.setGravity(Gravity.CENTER);
+        pressFx(modeBtn);
+        final TextView pageTxt = tv("", 14, 0xFFFFFFFF, true);
         pageTxt.setGravity(Gravity.CENTER);
-        pdfBar.addView(pPrev, new LinearLayout.LayoutParams(dp(56), dp(40)));
+        pdfBar.addView(pPrev, new LinearLayout.LayoutParams(dp(52), dp(44)));
         pdfBar.addView(pageTxt, new LinearLayout.LayoutParams(dp(130), -2));
-        pdfBar.addView(pNext, new LinearLayout.LayoutParams(dp(56), dp(40)));
-        pdfBar.addView(modeBtn, new LinearLayout.LayoutParams(dp(56), dp(40)));
+        pdfBar.addView(pNext, new LinearLayout.LayoutParams(dp(52), dp(44)));
+        pdfBar.addView(modeBtn, new LinearLayout.LayoutParams(dp(52), dp(44)));
         pdfBar.setVisibility(View.GONE);
         bottom.addView(pdfBar, new LinearLayout.LayoutParams(-1, -2));
 
-        LinearLayout nameRow = new LinearLayout(this);
-        nameRow.setGravity(Gravity.CENTER_VERTICAL);
-        final TextView nameTv = tv("", 15, 0xFFFFFFFF, true);
-        nameTv.setMaxLines(2);
-        nameTv.setEllipsize(TextUtils.TruncateAt.END);
-        nameRow.addView(nameTv, new LinearLayout.LayoutParams(0, -2, 1));
-        final TextView speedB = tv("1×", 13, 0xFFFFFFFF, true);
-        speedB.setGravity(Gravity.CENTER);
-        speedB.setPadding(dp(12), dp(6), dp(12), dp(6));
-        speedB.setBackground(round(TAG_GREEN, 16));
-        speedB.setVisibility(View.GONE);
-        pressFx(speedB);
+        LinearLayout acts = new LinearLayout(this);
+        final LinearLayout rotA = vAction("↻", t("v_rotate"));
+        LinearLayout tagA = vAction("🏷", t("act_tags"));
+        LinearLayout infoA = vAction("ⓘ", t("v_info"));
+        acts.addView(rotA, new LinearLayout.LayoutParams(0, -2, 1));
+        acts.addView(tagA, new LinearLayout.LayoutParams(0, -2, 1));
+        acts.addView(infoA, new LinearLayout.LayoutParams(0, -2, 1));
+        bottom.addView(acts, new LinearLayout.LayoutParams(-1, -2));
+        rootF.addView(bottom, new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM));
+        vr[3] = bottom;
+
+        // ----- панель сведений (свайп вверх)
+        final LinearLayout info = new LinearLayout(this);
+        info.setOrientation(LinearLayout.VERTICAL);
+        GradientDrawable ibg = new GradientDrawable();
+        ibg.setColor(0xF5161719);
+        float ir = dp(20);
+        ibg.setCornerRadii(new float[]{ir, ir, ir, ir, 0, 0, 0, 0});
+        info.setBackground(ibg);
+        info.setPadding(dp(20), dp(10), dp(20), dp(20));
+        info.setClickable(true);
+        View handle = new View(this);
+        handle.setBackground(round(0x59FFFFFF, 2));
+        LinearLayout.LayoutParams hlp = new LinearLayout.LayoutParams(dp(36), dp(4));
+        hlp.gravity = Gravity.CENTER_HORIZONTAL;
+        hlp.bottomMargin = dp(14);
+        info.addView(handle, hlp);
+        final LinearLayout infoBox = new LinearLayout(this);
+        infoBox.setOrientation(LinearLayout.VERTICAL);
+        MaxHScroll isv = new MaxHScroll(this, (int) (SH * 0.6f));
+        isv.addView(infoBox, new ViewGroup.LayoutParams(-1, -2));
+        info.addView(isv, new LinearLayout.LayoutParams(-1, -2));
+        info.setVisibility(View.INVISIBLE);
+        rootF.addView(info, new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM));
+        vr[4] = info;
+
+        rootF.setOnApplyWindowInsetsListener((v, ins) -> {
+            int bi = ins.getStableInsetBottom(), ti = ins.getSystemWindowInsetTop();
+            bottom.setPadding(dp(8), dp(28), dp(8), dp(8) + bi);
+            info.setPadding(dp(20), dp(10), dp(20), dp(20) + bi);
+            top.setPadding(dp(4), dp(8) + ti, dp(8), dp(22));
+            return ins;
+        });
+
+        // ----- скорость видео
         final float[] speeds = {1f, 1.5f, 2f, 0.5f};
         final int[] speedI = {0};
-        final MediaPlayer[] mpRef = new MediaPlayer[1];
         final Runnable applySpeed = () -> {
             try {
                 VideoView vv0 = vvRef[0];
@@ -3762,86 +3978,111 @@ public class MainActivity extends Activity {
             float sp = speeds[speedI[0]];
             speedB.setText((sp == (int) sp ? String.valueOf((int) sp) : String.valueOf(sp)) + "×");
             applySpeed.run();
+            armHide[0].run();
         });
-        LinearLayout.LayoutParams spp = new LinearLayout.LayoutParams(-2, -2);
-        spp.setMarginStart(dp(8));
-        nameRow.addView(speedB, spp);
-        TextView renameB = circleBtn("✎", 13);
-        LinearLayout.LayoutParams rbp = new LinearLayout.LayoutParams(dp(34), dp(34));
-        rbp.setMarginStart(dp(8));
-        nameRow.addView(renameB, rbp);
-        bottom.addView(nameRow, new LinearLayout.LayoutParams(-1, -2));
-        final TextView metaTv = tv("", 12, 0xFFB0B3BD, false);
-        LinearLayout.LayoutParams mlp = new LinearLayout.LayoutParams(-1, -2);
-        mlp.topMargin = dp(2);
-        bottom.addView(metaTv, mlp);
 
-        // Окошко тегов: ярлык поднимает/опускает список, карандаш открывает редактор
-        final LinearLayout tagsHead = new LinearLayout(this);
-        tagsHead.setGravity(Gravity.CENTER_VERTICAL);
-        final TextView tagsLabel = tv("", 13, 0xFFFFFFFF, true);
-        tagsLabel.setPadding(dp(14), dp(8), dp(14), dp(8));
-        tagsLabel.setBackground(round(0x33FFFFFF, 18));
-        pressFx(tagsLabel);
-        TextView pencil = circleBtn("✎", 15);
-        tagsHead.addView(tagsLabel, new LinearLayout.LayoutParams(-2, -2));
-        tagsHead.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1));
-        tagsHead.addView(pencil, new LinearLayout.LayoutParams(dp(38), dp(38)));
-        LinearLayout.LayoutParams thp = new LinearLayout.LayoutParams(-1, -2);
-        thp.topMargin = dp(12);
-        bottom.addView(tagsHead, thp);
-        // Теги в прокручиваемом окошке: помещаются все, сколько бы их ни было
-        final MaxHScroll tagsScroll = new MaxHScroll(this, (int) (getResources().getDisplayMetrics().heightPixels * 0.42f));
-        tagsRef[0] = tagsScroll;
-        final Flow tagsFlow = new Flow(this, dp(6), dp(6));
-        tagsScroll.addView(tagsFlow, new ViewGroup.LayoutParams(-1, -2));
-        LinearLayout.LayoutParams tflp = new LinearLayout.LayoutParams(-1, -2);
-        tflp.topMargin = dp(12);
-        tagsScroll.setVisibility(View.GONE);
-        bottom.addView(tagsScroll, tflp);
-        final TextView tagsEmpty = tv(t("tap_add_tags"), 12, 0xFFB0B3BD, false);
-        tagsEmpty.setVisibility(View.GONE);
-        LinearLayout.LayoutParams tep = new LinearLayout.LayoutParams(-1, -2);
-        tep.topMargin = dp(10);
-        bottom.addView(tagsEmpty, tep);
-        tagsUpd[0] = () -> {
-            Library.Item cur = list.get(idx[0]);
-            List<String> ts = Library.tagsOf(cur);
-            tagsLabel.setText((tagsOpen[0] ? "▾ " : "▴ ") + t("act_tags") + (ts.isEmpty() ? "" : " · " + ts.size()));
-            boolean showFlow = tagsOpen[0] && !ts.isEmpty();
-            boolean showEmpty = tagsOpen[0] && ts.isEmpty();
-            if ((tagsScroll.getVisibility() == View.VISIBLE) != showFlow || (tagsEmpty.getVisibility() == View.VISIBLE) != showEmpty) {
-                if (bottom.isAttachedToWindow()) TransitionManager.beginDelayedTransition(bottom);
-            }
-            tagsFlow.removeAllViews();
-            for (String s : ts) tagsFlow.addView(tagPill(s, false));
-            tagsScroll.setVisibility(showFlow ? View.VISIBLE : View.GONE);
-            tagsEmpty.setVisibility(showEmpty ? View.VISIBLE : View.GONE);
-            tagsScroll.scrollTo(0, 0);
+        final int[] hideTok = {0};
+        armHide[0] = () -> {
+            final int ht = ++hideTok[0];
+            ui.postDelayed(() -> {
+                if (ht != hideTok[0] || !dialog.isShowing() || !videoMode[0] || seeking[0] || infoOn[0]) return;
+                VideoView vv = vvRef[0];
+                if (vv != null && vv.isPlaying() && chromeOn[0]) { chromeOn[0] = false; setChrome[0].run(); }
+            }, 3000);
         };
-        tagsLabel.setOnClickListener(v -> { tagsOpen[0] = !tagsOpen[0]; tagsUpd[0].run(); });
-        pencil.setOnClickListener(v -> editTags(list.get(idx[0]), () -> { tagsOpen[0] = true; tagsUpd[0].run(); }));
-        renameB.setOnClickListener(v -> {
-            final Library.Item cur = list.get(idx[0]);
-            renameItem(cur, () -> nameTv.setText(cur.name));
-        });
-        nameTv.setOnClickListener(v -> {
-            final Library.Item cur = list.get(idx[0]);
-            renameItem(cur, () -> nameTv.setText(cur.name));
-        });
-        rootF.addView(bottom, new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM));
-        chrome[0] = top; chrome[1] = bottom; chrome[2] = prev; chrome[3] = next;
-        bottom.addOnLayoutChangeListener((vw0, c1, c2, c3, c4, c5, c6, c7, c8) -> {
-            if (videoMode[0] && bottom.getVisibility() == View.VISIBLE) {
-                FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) media.getLayoutParams();
-                if (lp != null && lp.bottomMargin != bottom.getHeight()) { lp.bottomMargin = bottom.getHeight(); media.setLayoutParams(lp); }
+
+        setChrome[0] = () -> {
+            fade(top, chromeOn[0]);
+            fade(bottom, chromeOn[0] && !infoOn[0]);
+            fade(playB, chromeOn[0] && videoMode[0] && !infoOn[0]);
+            Window w = dialog.getWindow();
+            if (w != null) w.getDecorView().setSystemUiVisibility(0x700 | (chromeOn[0] ? 0 : (0x2 | 0x4 | 0x1000)));
+            if (chromeOn[0]) armHide[0].run();
+        };
+
+        togglePlay[0] = () -> {
+            VideoView vv = vvRef[0];
+            if (vv == null) return;
+            if (vv.isPlaying()) { vv.pause(); playB.setText("▶"); }
+            else { vv.start(); playB.setText("⏸"); applySpeed.run(); armHide[0].run(); }
+        };
+        playB.setOnClickListener(v -> togglePlay[0].run());
+        seek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override public void onProgressChanged(SeekBar sb, int p, boolean user) {
+                if (!user) return;
+                VideoView vv = vvRef[0];
+                if (vv != null) vv.seekTo(p);
+                curT.setText(fmtDur(p));
             }
+
+            @Override public void onStartTrackingTouch(SeekBar sb) { seeking[0] = true; }
+
+            @Override public void onStopTrackingTouch(SeekBar sb) { seeking[0] = false; armHide[0].run(); }
         });
 
+        // ----- листание за пальцем
+        pageTo[0] = d -> {
+            media.setTranslationX(d);
+            prevPeek.setTranslationX(d - PG);
+            nextPeek.setTranslationX(d + PG);
+        };
+        settle[0] = dir -> {
+            float from = media.getTranslationX(), to = -dir * PG;
+            ValueAnimator va = ValueAnimator.ofFloat(from, to);
+            va.setDuration(dir == 0 ? 200 : 240);
+            va.setInterpolator(new DecelerateInterpolator(1.6f));
+            va.addUpdateListener(an -> pageTo[0].on((Float) an.getAnimatedValue()));
+            va.addListener(new android.animation.AnimatorListenerAdapter() {
+                @Override public void onAnimationEnd(android.animation.Animator an) {
+                    if (dir == 0) return;
+                    int ni = idx[0] + dir;
+                    if (ni < 0 || ni >= list.size()) { pageTo[0].on(0); return; }
+                    Bitmap cb = pc.get(list.get(ni).id);
+                    if (cb == null) {
+                        Drawable dd = (dir > 0 ? nextPeek : prevPeek).getDrawable();
+                        if (dd instanceof BitmapDrawable) cb = ((BitmapDrawable) dd).getBitmap();
+                    }
+                    carry[0] = cb;
+                    idx[0] = ni;
+                    pageTo[0].on(0);
+                    show[0].run();
+                }
+            });
+            va.start();
+        };
+
+        loadPeeks[0] = () -> {
+            final int my = token[0];
+            final int i0 = idx[0];
+            HashSet<String> keep = new HashSet<>();
+            for (int j = i0 - 1; j <= i0 + 1; j++) if (j >= 0 && j < list.size()) keep.add(list.get(j).id);
+            pc.keySet().retainAll(keep);
+            for (int k = -1; k <= 1; k += 2) {
+                final ImageView pk = k < 0 ? prevPeek : nextPeek;
+                final int j = i0 + k;
+                pk.setImageDrawable(null);
+                if (j < 0 || j >= list.size()) continue;
+                final Library.Item pi = list.get(j);
+                Bitmap have = pc.get(pi.id);
+                if (have != null) { pk.setImageBitmap(have); continue; }
+                Thumb c = thumbCache.get(pi.path);
+                if (c != null && c.bmp != null) pk.setImageBitmap(c.bmp);
+                pool.execute(() -> {
+                    final Bitmap b = peekBitmap(pi);
+                    ui.post(() -> {
+                        if (my != token[0] || b == null) return;
+                        pc.put(pi.id, b);
+                        pk.setImageBitmap(b);
+                    });
+                });
+            }
+        };
+
+        // ----- избранное, удаление, поворот, теги, сведения
         final Runnable updFav = () -> {
             Library.Item cur = list.get(idx[0]);
             favB.setText(cur.fav ? "♥" : "♡");
-            favB.setTextColor(cur.fav ? 0xFFFFD0E0 : 0xFFFFFFFF);
+            favB.setTextColor(cur.fav ? 0xFFFF5C7A : 0xFFFFFFFF);
         };
         favB.setOnClickListener(v -> {
             buzz(v, HapticFeedbackConstants.KEYBOARD_TAP);
@@ -3850,13 +4091,179 @@ public class MainActivity extends Activity {
             lib.save();
             updFav.run();
             favB.animate().cancel();
-            favB.animate().scaleX(1.4f).scaleY(1.4f).setDuration(120).withEndAction(() -> favB.animate().scaleX(1f).scaleY(1f).setDuration(200).setInterpolator(new OvershootInterpolator(3f)).start()).start();
-            refreshAll();
+            favB.setScaleX(1.25f);
+            favB.setScaleY(1.25f);
+            favB.animate().scaleX(1f).scaleY(1f).setDuration(220).setInterpolator(new DecelerateInterpolator(1.5f)).start();
         });
+        back.setOnClickListener(v -> dialog.dismiss());
+        delB.setOnClickListener(v -> {
+            final int i = idx[0];
+            Library.Item gone = list.get(i);
+            lib.moveToTrash(gone);
+            lib.save();
+            list.remove(i);
+            pc.remove(gone.id);
+            toast(tf("moved_trash", 1));
+            if (list.isEmpty()) { dialog.dismiss(); return; }
+            if (idx[0] >= list.size()) idx[0] = list.size() - 1;
+            media.animate().cancel();
+            media.animate().alpha(0f).scaleX(0.92f).scaleY(0.92f).setDuration(140).withEndAction(() -> {
+                media.setAlpha(1f);
+                media.setScaleX(1f);
+                media.setScaleY(1f);
+                show[0].run();
+            }).start();
+        });
+        rotA.setOnClickListener(v -> {
+            Library.Item cur = list.get(idx[0]);
+            ZoomImageView iv = zoomRef[0];
+            if (iv == null || !Library.isImage(cur.name)) return;
+            cur.rot = (cur.rot + 90) % 360;
+            lib.save();
+            thumbCache.remove(cur.path);
+            Drawable dd = iv.getDrawable();
+            if (dd instanceof BitmapDrawable) {
+                Bitmap nb = rotated(((BitmapDrawable) dd).getBitmap(), 90);
+                pc.put(cur.id, nb);
+                iv.setImageBitmap(nb);
+                iv.setRotation(-90f);
+                iv.animate().rotation(0f).setDuration(220).setInterpolator(new DecelerateInterpolator(1.5f)).start();
+            }
+            if (infoOn[0]) fillInfo[0].run();
+        });
+        tagA.setOnClickListener(v -> editTags(list.get(idx[0]), () -> { if (infoOn[0]) fillInfo[0].run(); }));
+        infoA.setOnClickListener(v -> openInfo[0].run());
 
-        close.setOnClickListener(v -> dialog.dismiss());
-        prev.setOnClickListener(v -> { slide[0] = -1; idx[0] = (idx[0] + list.size() - 1) % list.size(); show[0].run(); });
-        next.setOnClickListener(v -> { slide[0] = 1; idx[0] = (idx[0] + 1) % list.size(); show[0].run(); });
+        fillInfo[0] = () -> {
+            infoBox.removeAllViews();
+            final Library.Item it = list.get(idx[0]);
+            final int my = token[0];
+            Locale loc = new Locale(lang);
+            LinearLayout nameRow = new LinearLayout(this);
+            nameRow.setGravity(Gravity.CENTER_VERTICAL);
+            TextView nm = tv(it.name, 17, 0xFFFFFFFF, true);
+            nm.setMaxLines(3);
+            nm.setEllipsize(TextUtils.TruncateAt.END);
+            nameRow.addView(nm, new LinearLayout.LayoutParams(0, -2, 1));
+            TextView ed = vIcon("✎", 18);
+            ed.setOnClickListener(v -> renameItem(it, () -> fillInfo[0].run()));
+            nameRow.addView(ed, new LinearLayout.LayoutParams(dp(40), dp(40)));
+            infoBox.addView(nameRow, new LinearLayout.LayoutParams(-1, -2));
+            TextView when = tv(DateFormat.getDateTimeInstance(DateFormat.LONG, DateFormat.SHORT, loc).format(new Date(it.added)), 14, 0xDDFFFFFF, false);
+            when.setPadding(0, dp(2), 0, 0);
+            infoBox.addView(when);
+            final TextView det = tv("…", 13, 0x99FFFFFF, false);
+            det.setPadding(0, dp(2), 0, 0);
+            infoBox.addView(det);
+            if (it.enc) {
+                TextView en = tv(t("v_encrypted"), 13, 0x99FFFFFF, false);
+                startIcon(en, R.drawable.ic_lock, 0x99FFFFFF);
+                en.setPadding(0, dp(6), 0, 0);
+                infoBox.addView(en);
+            }
+            pool.execute(() -> {
+                int dot = it.name.lastIndexOf('.');
+                String ext = dot > 0 ? it.name.substring(dot + 1).toUpperCase(Locale.ROOT) : "";
+                File pf = it.enc ? plainCached(it) : new File(it.path);
+                long size = it.enc && it.size > 0 ? it.size : new File(it.path).length();
+                StringBuilder sb = new StringBuilder();
+                try {
+                    if (pf != null) {
+                        if (Library.isVideo(it.name)) {
+                            MediaMetadataRetriever r = new MediaMetadataRetriever();
+                            try {
+                                r.setDataSource(pf.getAbsolutePath());
+                                String w = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH);
+                                String h = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT);
+                                String rs = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION);
+                                String d = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);
+                                boolean swp = "90".equals(rs) || "270".equals(rs);
+                                if (w != null && h != null) sb.append(swp ? h : w).append(" × ").append(swp ? w : h);
+                                if (d != null) sb.append(sb.length() > 0 ? " · " : "").append(fmtDur(Long.parseLong(d)));
+                            } finally { try { r.release(); } catch (Exception ignored) { } }
+                        } else if (Library.isPdf(it.name)) {
+                            try (ParcelFileDescriptor p = ParcelFileDescriptor.open(pf, ParcelFileDescriptor.MODE_READ_ONLY)) {
+                                PdfRenderer r = new PdfRenderer(p);
+                                sb.append(tf("v_pages", r.getPageCount()));
+                                r.close();
+                            }
+                        } else {
+                            BitmapFactory.Options o = new BitmapFactory.Options();
+                            o.inJustDecodeBounds = true;
+                            BitmapFactory.decodeFile(pf.getAbsolutePath(), o);
+                            if (o.outWidth > 0) {
+                                boolean swp = it.rot % 180 != 0;
+                                sb.append(swp ? o.outHeight : o.outWidth).append(" × ").append(swp ? o.outWidth : o.outHeight);
+                            }
+                        }
+                    }
+                } catch (Throwable ignored) { }
+                if (sb.length() > 0) sb.append(" · ");
+                sb.append(fmtSize(size));
+                if (!ext.isEmpty()) sb.append(" · ").append(ext);
+                final String txt = sb.toString();
+                ui.post(() -> { if (my == token[0]) det.setText(txt); });
+            });
+
+            infoBox.addView(vLabel(t("act_tags")));
+            Flow tfl = new Flow(this, dp(6), dp(6));
+            for (String s : Library.tagsOf(it)) tfl.addView(tagPill(s, false));
+            TextView addT = vChip("＋");
+            addT.setTextSize(14);
+            addT.setOnClickListener(v -> editTags(it, () -> fillInfo[0].run()));
+            tfl.addView(addT);
+            infoBox.addView(tfl, new LinearLayout.LayoutParams(-1, -2));
+
+            infoBox.addView(vLabel(t("tab_albums")));
+            Flow afl = new Flow(this, dp(6), dp(6));
+            boolean any = false;
+            for (Library.Album al : lib.albums) {
+                if (!Library.inAlb(it, al.id)) continue;
+                any = true;
+                afl.addView(vChip(al.name));
+            }
+            if (!any) {
+                TextView none = tv(t("v_no_album"), 13, 0x99FFFFFF, false);
+                none.setPadding(0, dp(6), dp(6), dp(6));
+                afl.addView(none);
+            }
+            TextView addA = vChip("＋");
+            addA.setTextSize(14);
+            addA.setOnClickListener(v -> {
+                ArrayList<Library.Item> one = new ArrayList<>();
+                one.add(it);
+                chooseAlbum(one);
+            });
+            afl.addView(addA);
+            infoBox.addView(afl, new LinearLayout.LayoutParams(-1, -2));
+            fxTree(infoBox);
+        };
+
+        openInfo[0] = () -> {
+            if (infoOn[0]) return;
+            infoOn[0] = true;
+            fillInfo[0].run();
+            chromeOn[0] = true;
+            setChrome[0].run();
+            info.setVisibility(View.VISIBLE);
+            info.setAlpha(1f);
+            info.post(() -> {
+                float hgt = info.getHeight();
+                info.setTranslationY(hgt);
+                info.animate().translationY(0f).setDuration(240).setInterpolator(new DecelerateInterpolator(2f)).start();
+                media.animate().translationY(-hgt * 0.45f).setDuration(240).setInterpolator(new DecelerateInterpolator(2f)).start();
+            });
+        };
+        closeInfo[0] = () -> {
+            if (!infoOn[0]) return;
+            infoOn[0] = false;
+            info.animate().cancel();
+            info.animate().translationY(info.getHeight()).setDuration(200).withEndAction(() -> info.setVisibility(View.INVISIBLE)).start();
+            media.animate().translationY(0f).setDuration(200).start();
+            setChrome[0].run();
+        };
+
+        // ----- PDF
         stepPage[0] = dlt -> {
             int np = pdf.page + dlt;
             if (np < 0 || np >= pdf.pages) return;
@@ -3871,25 +4278,7 @@ public class MainActivity extends Activity {
             mmode[0] = (mmode[0] + 1) % 3;
             prefs.edit().putInt("mmode", mmode[0]).apply();
             toast(t("mmode_" + mmode[0]));
-            slide[0] = 0;
             show[0].run();
-        });
-        // Удаление прямо из просмотра: файл уходит в корзину, показывается следующий
-        del.setOnClickListener(v -> {
-            final int i = idx[0];
-            Library.Item gone = list.get(i);
-            lib.moveToTrash(gone);
-            lib.save();
-            list.remove(i);
-            refreshAll();
-            toast(tf("moved_trash", 1));
-            if (list.isEmpty()) { dialog.dismiss(); return; }
-            if (idx[0] >= list.size()) idx[0] = list.size() - 1;
-            media.animate().cancel();
-            media.animate().alpha(0f).scaleX(0.9f).scaleY(0.9f).setDuration(140).withEndAction(() -> {
-                slide[0] = 0;
-                show[0].run();
-            }).start();
         });
 
         // позиция видео запоминается и восстанавливается
@@ -3914,7 +4303,7 @@ public class MainActivity extends Activity {
                 Bitmap bmp = null;
                 try {
                     PdfRenderer.Page p = pdf.r.openPage(pg);
-                    int w = Math.min(getResources().getDisplayMetrics().widthPixels, 1400);
+                    int w = Math.min(SW, 1400);
                     int h = Math.max(1, (int) ((long) w * p.getHeight() / Math.max(1, p.getWidth())));
                     bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
                     bmp.eraseColor(0xFFFFFFFF);
@@ -3933,88 +4322,107 @@ public class MainActivity extends Activity {
             });
         };
 
+        // ----- показ текущего файла
         show[0] = () -> {
             saveVp[0].run();
             token[0]++;
             final int my = token[0];
-            media.animate().cancel();
-            media.setScaleX(1f);
-            media.setScaleY(1f);
-            media.setAlpha(0f);
-            media.setTranslationX(slide[0] * dp(48));
-            media.animate().alpha(1f).translationX(0f).setDuration(260).start();
-            slide[0] = 0;
-            if (mcRef[0] != null) mcRef[0].hide();
             stopMedia(media);
             media.removeAllViews();
+            media.setTranslationY(0f);
             closePdf(pdf);
             zoomRef[0] = null;
             vvRef[0] = null;
+            mpRef[0] = null;
             vsRef[0] = null;
             topsRef[0] = null;
             pdfMode[0] = false;
             videoMode[0] = false;
+            vbar.setVisibility(View.GONE);
             pdfBar.setVisibility(View.GONE);
-            speedB.setVisibility(View.GONE);
             speedI[0] = 0;
             speedB.setText("1×");
-            mpRef[0] = null;
             final Library.Item it = list.get(idx[0]);
             curId[0] = it.id;
             prefs.edit().putString("last_id", it.id).apply();
-            counter.setText((idx[0] + 1) + " / " + list.size());
-            nameTv.setText(it.name);
+            Locale loc = new Locale(lang);
+            Date dt = new Date(it.added);
+            dateTv.setText(DateFormat.getDateInstance(DateFormat.LONG, loc).format(dt));
+            subTv.setText(DateFormat.getTimeInstance(DateFormat.SHORT, loc).format(dt) + "   " + tf("v_of", idx[0] + 1, list.size()));
             updFav.run();
+            rotA.setVisibility(Library.isImage(it.name) ? View.VISIBLE : View.GONE);
+            Bitmap cr = carry[0];
+            carry[0] = null;
+            if (cr == null) cr = pc.get(it.id);
+            if (cr == null) { Thumb tc = thumbCache.get(it.path); if (tc != null) cr = tc.bmp; }
+            final Bitmap carried = cr;
+            loadPeeks[0].run();
+            if (infoOn[0]) fillInfo[0].run();
             File f0 = new File(it.path);
             if (it.enc) {
-                File pc = plainCached(it);
-                if (pc == null) {
-                    metaTv.setText("🔒 …");
+                File pcf = plainCached(it);
+                if (pcf == null) {
+                    if (carried != null) {
+                        ImageView ph = new ImageView(this);
+                        ph.setScaleType(ImageView.ScaleType.FIT_CENTER);
+                        ph.setImageBitmap(carried);
+                        media.addView(ph, new FrameLayout.LayoutParams(-1, -1));
+                    }
                     pool.execute(() -> {
                         final File pf = plainFile(it);
                         ui.post(() -> {
                             if (my != token[0]) return;
-                            if (pf != null) show[0].run(); else toast(t("integrity_bad"));
+                            if (pf != null) { carry[0] = carried; show[0].run(); } else toast(t("integrity_bad"));
                         });
                     });
+                    setChrome[0].run();
                     return;
                 }
-                f0 = pc;
+                f0 = pcf;
             }
             final File f = f0;
-            String kind = Library.isPdf(it.name) ? t("kind_manga") : Library.isVideo(it.name) ? t("kind_video") : t("kind_photo");
-            metaTv.setText((it.enc ? "🔒 " : "") + kind + " · " + fmtSize(f.length()) + " · " + DateFormat.getDateInstance(DateFormat.MEDIUM, new Locale(lang)).format(new Date(it.added)));
-            tagsUpd[0].run();
-            int arrows = list.size() > 1 && top.getVisibility() == View.VISIBLE ? View.VISIBLE : View.GONE;
-            prev.setVisibility(arrows);
-            next.setVisibility(arrows);
-            if (!f.exists()) { toast(t("missing")); return; }
-            final FrameLayout.LayoutParams mlp2 = new FrameLayout.LayoutParams(-1, -1);
+            if (!f.exists()) { toast(t("missing")); setChrome[0].run(); return; }
             if (Library.isVideo(it.name)) {
                 videoMode[0] = true;
-                top.setVisibility(View.VISIBLE);
-                bottom.setVisibility(View.VISIBLE);
+                vbar.setVisibility(View.VISIBLE);
+                seek.setProgress(0);
+                curT.setText("0:00");
+                durT.setText("…");
                 final VideoView vv = new VideoView(this);
-                MediaController mc = new MediaController(this);
-                mc.setAnchorView(vv);
-                vv.setMediaController(mc);
-                mcRef[0] = mc;
                 vvRef[0] = vv;
-                final int resume = prefs.getInt("vp_" + it.id, 0);
-                vv.setOnPreparedListener(mp -> { mpRef[0] = mp; if (my == token[0] && resume > 0) vv.seekTo(resume); });
-                vv.setOnCompletionListener(mp -> prefs.edit().remove("vp_" + it.id).apply());
-                vv.setVideoPath(f.getAbsolutePath());
+                final ImageView poster = new ImageView(this);
+                poster.setScaleType(ImageView.ScaleType.FIT_CENTER);
+                if (carried != null) poster.setImageBitmap(carried);
                 media.addView(vv, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
-                // видео и его кнопки управления остаются над нижней панелью
-                bottom.post(() -> {
+                media.addView(poster, new FrameLayout.LayoutParams(-1, -1));
+                final int resume = prefs.getInt("vp_" + it.id, 0);
+                vv.setOnPreparedListener(mp -> {
                     if (my != token[0]) return;
-                    mlp2.bottomMargin = bottom.getHeight();
-                    media.setLayoutParams(mlp2);
+                    mpRef[0] = mp;
+                    int d = vv.getDuration();
+                    seek.setMax(Math.max(1, d));
+                    durT.setText(fmtDur(d));
+                    if (resume > 0) vv.seekTo(resume);
+                    vv.start();
+                    applySpeed.run();
+                    playB.setText("⏸");
+                    armHide[0].run();
                 });
-                vv.start();
-                speedB.setVisibility(View.VISIBLE);
+                vv.setOnInfoListener((mp, what, extra) -> {
+                    if (what == MediaPlayer.MEDIA_INFO_VIDEO_RENDERING_START)
+                        poster.animate().alpha(0f).setDuration(150).withEndAction(() -> poster.setVisibility(View.GONE)).start();
+                    return false;
+                });
+                vv.setOnCompletionListener(mp -> {
+                    prefs.edit().remove("vp_" + it.id).apply();
+                    playB.setText("▶");
+                    chromeOn[0] = true;
+                    setChrome[0].run();
+                });
+                vv.setOnErrorListener((mp, w, e) -> { toast(t("unsupported")); return true; });
+                vv.setVideoPath(f.getAbsolutePath());
+                playB.setText("▶");
             } else if (Library.isPdf(it.name)) {
-                media.setLayoutParams(mlp2);
                 pdfMode[0] = true;
                 pdf.page = Math.max(0, prefs.getInt("pg_" + it.id, 0));
                 pdfBar.setVisibility(View.VISIBLE);
@@ -4055,24 +4463,27 @@ public class MainActivity extends Activity {
                     });
                 });
             } else {
-                media.setLayoutParams(mlp2);
                 final ZoomImageView iv = new ZoomImageView(this);
                 media.addView(iv, new FrameLayout.LayoutParams(-1, -1));
                 zoomRef[0] = iv;
+                if (carried != null) iv.setImageBitmap(carried);
                 pool.execute(() -> {
-                    final Bitmap b = decodeSampled(f.getAbsolutePath(), 2048);
+                    final Bitmap b = rotated(decodeSampled(f.getAbsolutePath(), 2048), it.rot);
                     ui.post(() -> {
-                        if (my == token[0]) { if (b != null) iv.setImageBitmap(b); else toast(t("unsupported")); }
+                        if (my != token[0]) return;
+                        if (b != null) { iv.setImageBitmap(b); pc.put(it.id, b); }
+                        else if (carried == null) toast(t("unsupported"));
                     });
                 });
             }
+            setChrome[0].run();
         };
+
         dialog.setContentView(rootF);
         animWin(dialog, R.style.OmvFadeAnim);
         fxTree(rootF);
         dialog.setOnDismissListener(d -> {
             saveVp[0].run();
-            if (mcRef[0] != null) mcRef[0].hide();
             stopMedia(media);
             closePdf(pdf);
             cleanDec();
@@ -4080,26 +4491,45 @@ public class MainActivity extends Activity {
         });
         openDialogs.add(dialog);
         dialog.show();
+        Window dw = dialog.getWindow();
+        if (dw != null) {
+            dw.setNavigationBarColor(0x00000000);
+            dw.getDecorView().setSystemUiVisibility(0x700);
+        }
         show[0].run();
         if (zoomFrom != null) {   // фото «вырастает» из плитки
             final Rect zr = zoomFrom;
             zoomFrom = null;
-            float sw = getResources().getDisplayMetrics().widthPixels;
-            float sc = Math.max(0.15f, Math.min(1f, zr.width() / sw));
+            float sc = Math.max(0.15f, Math.min(1f, zr.width() / (float) SW));
             media.setPivotX(zr.exactCenterX());
             media.setPivotY(zr.exactCenterY());
             media.setScaleX(sc);
             media.setScaleY(sc);
-            media.animate().scaleX(1f).scaleY(1f).alpha(1f).setDuration(340).setInterpolator(new DecelerateInterpolator(2.2f))
+            media.setAlpha(0f);
+            media.animate().scaleX(1f).scaleY(1f).alpha(1f).setDuration(300).setInterpolator(new DecelerateInterpolator(2.2f))
                     .withEndAction(() -> { media.setPivotX(media.getWidth() / 2f); media.setPivotY(media.getHeight() / 2f); }).start();
         }
         final Runnable[] tick = new Runnable[1];
         tick[0] = () -> {
             if (!dialog.isShowing()) return;
-            saveVp[0].run();
-            ui.postDelayed(tick[0], 3000);
+            VideoView vv = vvRef[0];
+            if (vv != null && videoMode[0] && !seeking[0]) {
+                try {
+                    int p = vv.getCurrentPosition();
+                    seek.setProgress(p);
+                    curT.setText(fmtDur(p));
+                } catch (Exception ignored) { }
+            }
+            ui.postDelayed(tick[0], 250);
         };
-        ui.postDelayed(tick[0], 3000);
+        ui.postDelayed(tick[0], 250);
+        final Runnable[] vpTick = new Runnable[1];
+        vpTick[0] = () -> {
+            if (!dialog.isShowing()) return;
+            saveVp[0].run();
+            ui.postDelayed(vpTick[0], 3000);
+        };
+        ui.postDelayed(vpTick[0], 3000);
     }
 
     // Режим «вертикальная лента» для манги: страницы рисуются по мере прокрутки
@@ -4246,7 +4676,6 @@ public class MainActivity extends Activity {
     private void buildLock() {
         lockView = new FrameLayout(this);
         lockView.setBackgroundColor(BG);
-        lockView.addView(new Aurora(this, ACCENT, ACCENT2, darkTheme), new FrameLayout.LayoutParams(-1, -1));
         lockView.setClickable(true);
         lockView.setVisibility(View.GONE);
         lockView.setOnApplyWindowInsetsListener((v, insets) -> {
@@ -4257,13 +4686,9 @@ public class MainActivity extends Activity {
         col.setOrientation(LinearLayout.VERTICAL);
         col.setGravity(Gravity.CENTER_HORIZONTAL);
         col.setPadding(dp(32), dp(24), dp(32), dp(24));
-        TextView lockIc = tv("🔒", 30, ONACC, false);
+        TextView lockIc = tv("🔒", 34, ACCENT, false);
         lockIc.setGravity(Gravity.CENTER);
-        GradientDrawable lig = new GradientDrawable(GradientDrawable.Orientation.TL_BR, new int[]{ACCENT, ACCENT2});
-        lig.setShape(GradientDrawable.OVAL);
-        lockIc.setBackground(lig);
-        glow(lockIc, ACCENT, 12);
-        LinearLayout.LayoutParams lip = new LinearLayout.LayoutParams(dp(84), dp(84));
+        LinearLayout.LayoutParams lip = new LinearLayout.LayoutParams(dp(64), dp(64));
         lip.gravity = Gravity.CENTER_HORIZONTAL;
         lip.bottomMargin = dp(8);
         col.addView(lockIc, lip);
@@ -4283,14 +4708,19 @@ public class MainActivity extends Activity {
         String[][] keys = {{"1", "2", "3"}, {"4", "5", "6"}, {"7", "8", "9"}, {"⌫", "0", "✓"}};
         for (String[] rowKeys : keys) {
             LinearLayout row = new LinearLayout(this);
+            row.setGravity(Gravity.CENTER_HORIZONTAL);
             for (final String k : rowKeys) {
                 TextView key = tv(k, k.equals("⌫") ? 22 : 26, k.equals("✓") ? ONACC : FG, true);
                 key.setGravity(Gravity.CENTER);
-                key.setBackground(k.equals("✓") ? accentBg(36) : k.equals("⌫") ? round(BTN, 36) : panel(36));
+                GradientDrawable kg = new GradientDrawable();
+                kg.setShape(GradientDrawable.OVAL);
+                if (k.equals("✓")) kg.setColor(ACCENT);
+                else if (!k.equals("⌫")) { kg.setColor(0x00000000); kg.setStroke(Math.max(1, dp(1)), (FG & 0x00FFFFFF) | 0x33000000); }
+                key.setBackground(kg);
                 if (TF_MED != null && !k.equals("✓") && !k.equals("⌫")) key.setTypeface(TF_MED);
                 key.setOnClickListener(v -> pinKey(k));
-                LinearLayout.LayoutParams kp = new LinearLayout.LayoutParams(0, dp(72), 1);
-                kp.setMargins(dp(8), dp(7), dp(8), dp(7));
+                LinearLayout.LayoutParams kp = new LinearLayout.LayoutParams(dp(72), dp(72));
+                kp.setMargins(dp(10), dp(7), dp(10), dp(7));
                 row.addView(key, kp);
             }
             col.addView(row, new LinearLayout.LayoutParams(-1, -2));
@@ -4307,7 +4737,7 @@ public class MainActivity extends Activity {
             pinDots.animate().cancel();
             pinDots.setScaleX(1.12f);
             pinDots.setScaleY(1.12f);
-            pinDots.animate().scaleX(1f).scaleY(1f).setDuration(180).setInterpolator(new OvershootInterpolator(3f)).start();
+            pinDots.animate().scaleX(1f).scaleY(1f).setDuration(180).setInterpolator(new DecelerateInterpolator(1.5f)).start();
         }
     }
 
@@ -4438,11 +4868,20 @@ public class MainActivity extends Activity {
         LinearLayout card = null;
         for (View v : kids) {
             if ("sec".equals(v.getTag())) {
+                if (card != null) {
+                    View dv = new View(this);
+                    dv.setBackgroundColor((FG & 0x00FFFFFF) | 0x1A000000);
+                    LinearLayout.LayoutParams dvp = new LinearLayout.LayoutParams(-1, Math.max(1, dp(1) / 2));
+                    dvp.topMargin = dp(12);
+                    setBox.addView(dv, dvp);
+                }
                 setBox.addView(v, new LinearLayout.LayoutParams(-1, -2));
                 card = new LinearLayout(this);
                 card.setOrientation(LinearLayout.VERTICAL);
-                card.setPadding(dp(14), dp(10), dp(14), dp(14));
-                card.setBackground(hasBg() ? round((PANEL & 0x00FFFFFF) | 0xE6000000, 22) : panel(22));
+                if (hasBg()) {
+                    card.setPadding(dp(14), dp(10), dp(14), dp(14));
+                    card.setBackground(round((PANEL & 0x00FFFFFF) | 0xE6000000, 14));
+                } else card.setPadding(dp(2), 0, dp(2), dp(4));
                 setBox.addView(card, new LinearLayout.LayoutParams(-1, -2));
             } else if ("ver".equals(v.getTag()) || card == null) {
                 setBox.addView(v);
@@ -4457,7 +4896,7 @@ public class MainActivity extends Activity {
         setBox.removeAllViews();
         setBox.addView(headline(t("tab_settings"), 30), new LinearLayout.LayoutParams(-1, -2));
 
-        setBox.addView(sectionLabel("🌐", t("set_language")));
+        setBox.addView(sectionLabel(R.drawable.ic_language, t("set_language")));
         Flow lf = new Flow(this, dp(8), dp(8));
         for (int i = 0; i < Strings.LANGS.length; i++) {
             final String code = Strings.LANGS[i];
@@ -4467,7 +4906,7 @@ public class MainActivity extends Activity {
         }
         setBox.addView(lf, new LinearLayout.LayoutParams(-1, -2));
 
-        setBox.addView(sectionLabel("🎨", t("set_appearance")));
+        setBox.addView(sectionLabel(R.drawable.ic_palette, t("set_appearance")));
         setBox.addView(tv(t("set_theme"), 15, FG, true));
         Flow themeFlow = new Flow(this, dp(14), dp(10));
         String cur = prefs.getString("theme", "system");
@@ -4492,6 +4931,28 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams tfp = new LinearLayout.LayoutParams(-1, -2);
         tfp.topMargin = dp(8);
         setBox.addView(themeFlow, tfp);
+
+        TextView fontLbl = tv(t("font_title"), 15, FG, true);
+        LinearLayout.LayoutParams fnp = new LinearLayout.LayoutParams(-1, -2);
+        fnp.topMargin = dp(16);
+        setBox.addView(fontLbl, fnp);
+        Flow fontFlow = new Flow(this, dp(8), dp(8));
+        final String[] fKeys = {"system", "inter", "plex", "serif", "hand"};
+        String[] fNames = {t("font_system"), "Inter", "IBM Plex", "PT Serif", "Caveat"};
+        String[] fFiles = {null, "Inter-Regular", "Plex-Regular", "PTSerif-Regular", "Caveat-Regular"};
+        String curF = prefs.getString("font", "inter");
+        for (int i = 0; i < fKeys.length; i++) {
+            final String fk = fKeys[i];
+            TextView c = chip(fNames[i], fk.equals(curF));
+            Typeface ft = fFiles[i] == null ? Typeface.DEFAULT : asset(fFiles[i]);
+            if (ft != null) c.setTypeface(ft);
+            c.setTextSize(fk.equals("hand") ? 17 : 13);
+            c.setOnClickListener(v -> { prefs.edit().putString("font", fk).apply(); recreate(); });
+            fontFlow.addView(c);
+        }
+        LinearLayout.LayoutParams ffp = new LinearLayout.LayoutParams(-1, -2);
+        ffp.topMargin = dp(8);
+        setBox.addView(fontFlow, ffp);
 
         TextView iconLbl = tv(t("app_icon"), 15, FG, true);
         LinearLayout.LayoutParams ilp = new LinearLayout.LayoutParams(-1, -2);
@@ -4545,7 +5006,7 @@ public class MainActivity extends Activity {
         TextView val = tv(String.valueOf(cols), 16, FG, true);
         val.setGravity(Gravity.CENTER);
         minus.setOnClickListener(v -> { if (cols > 1) { cols--; prefs.edit().putInt("cols", cols).apply(); renderSettings(); } });
-        plus.setOnClickListener(v -> { if (cols < 4) { cols++; prefs.edit().putInt("cols", cols).apply(); renderSettings(); } });
+        plus.setOnClickListener(v -> { if (cols < 5) { cols++; prefs.edit().putInt("cols", cols).apply(); renderSettings(); } });
         stepper.addView(minus, new LinearLayout.LayoutParams(dp(44), dp(40)));
         stepper.addView(val, new LinearLayout.LayoutParams(dp(40), -2));
         stepper.addView(plus, new LinearLayout.LayoutParams(dp(44), dp(40)));
@@ -4642,8 +5103,9 @@ public class MainActivity extends Activity {
             setBox.addView(settingRow(t("bg_dim"), dimSt), new LinearLayout.LayoutParams(-1, -2));
         }
 
-        setBox.addView(sectionLabel("✨", t("set_brand")));
-        TextView nameBtn = button("✎  " + appName());
+        setBox.addView(sectionLabel(R.drawable.ic_widgets, t("set_brand")));
+        TextView nameBtn = button(appName());
+        startIcon(nameBtn, R.drawable.ic_edit, FG);
         nameBtn.setSingleLine(true);
         nameBtn.setEllipsize(TextUtils.TruncateAt.END);
         nameBtn.setMaxWidth(dp(190));
@@ -4692,7 +5154,7 @@ public class MainActivity extends Activity {
         brNote.setPadding(0, dp(8), 0, 0);
         setBox.addView(brNote, new LinearLayout.LayoutParams(-1, -2));
 
-        setBox.addView(sectionLabel("🔐", t("set_security")));
+        setBox.addView(sectionLabel(R.drawable.ic_key, t("set_security")));
         if (!decoy) {
             setBox.addView(settingRow(t("pin_code"), tv(hasPin() ? t("pin_on") : t("pin_off"), 14, hasPin() ? ACCENT : MUTED, true)), new LinearLayout.LayoutParams(-1, -2));
             LinearLayout pinRow = new LinearLayout(this);
@@ -4743,7 +5205,7 @@ public class MainActivity extends Activity {
         shotsChip.setOnClickListener(v -> { prefs.edit().putBoolean("no_shots", !prefs.getBoolean("no_shots", false)).apply(); applySecure(); renderSettings(); });
         setBox.addView(settingRow(t("no_shots"), shotsChip), new LinearLayout.LayoutParams(-1, -2));
 
-        setBox.addView(sectionLabel("🛡️", t("set_protect")));
+        setBox.addView(sectionLabel(R.drawable.ic_shield, t("set_protect")));
         final TextView encChip = toggleChip(prefs.getBoolean("enc_new", false));
         encChip.setOnClickListener(v -> { prefs.edit().putBoolean("enc_new", !prefs.getBoolean("enc_new", false)).apply(); renderSettings(); });
         setBox.addView(settingRow(t("enc_new"), encChip), new LinearLayout.LayoutParams(-1, -2));
@@ -4761,7 +5223,7 @@ public class MainActivity extends Activity {
         encNote.setPadding(0, dp(8), 0, 0);
         setBox.addView(encNote, new LinearLayout.LayoutParams(-1, -2));
 
-        setBox.addView(sectionLabel("🧠", t("set_smart")));
+        setBox.addView(sectionLabel(R.drawable.ic_tag, t("set_smart")));
         final TextView atChip = toggleChip(prefs.getBoolean("autotag_new", true));
         atChip.setOnClickListener(v -> { prefs.edit().putBoolean("autotag_new", !prefs.getBoolean("autotag_new", true)).apply(); renderSettings(); });
         setBox.addView(settingRow(t("autotag_new"), atChip), new LinearLayout.LayoutParams(-1, -2));
@@ -4791,7 +5253,7 @@ public class MainActivity extends Activity {
         }
         setBox.addView(trFlow, new LinearLayout.LayoutParams(-1, -2));
 
-        setBox.addView(sectionLabel("📚", t("set_library")));
+        setBox.addView(sectionLabel(R.drawable.ic_album, t("set_library")));
         TextView statsB = button(t("stats_btn"));
         statsB.setOnClickListener(v -> openStats());
         setBox.addView(statsB, params(-1, 48));
@@ -4806,7 +5268,7 @@ public class MainActivity extends Activity {
         ibp.topMargin = dp(8);
         setBox.addView(intB, ibp);
 
-        setBox.addView(sectionLabel("💾", t("set_data")));
+        setBox.addView(sectionLabel(R.drawable.ic_storage, t("set_data")));
         TextView exp = button(t("export_all"));
         exp.setOnClickListener(v -> startExport());
         setBox.addView(exp, params(-1, 48));
@@ -4833,7 +5295,7 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams rsp = params(-1, 48);
         rsp.topMargin = dp(10);
         setBox.addView(rs, rsp);
-        TextView ver = tv("Offline Media Vault · v2.1", 11, MUTED, false);
+        TextView ver = tv("Offline Media Vault · v2.2", 11, MUTED, false);
         ver.setGravity(Gravity.CENTER);
         ver.setPadding(0, dp(18), 0, 0);
         ver.setTag("ver");

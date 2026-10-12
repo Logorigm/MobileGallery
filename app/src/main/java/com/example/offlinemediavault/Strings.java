@@ -407,8 +407,8 @@ final class Strings {
         b("dup_title", "Duplikate", "Doublons", "重复文件", "重複ファイル");
         a("dup_scanning", "Comparing files…", "Сравниваю файлы…", "Comparando archivos…", "در حال مقایسه فایل‌ها…");
         b("dup_scanning", "Dateien werden verglichen …", "Comparaison des fichiers…", "正在比较文件…", "ファイルを比較中…");
-        a("dup_none", "No duplicates found 🎉", "Дубликатов нет 🎉", "No se encontraron duplicados 🎉", "فایل تکراری پیدا نشد 🎉");
-        b("dup_none", "Keine Duplikate gefunden 🎉", "Aucun doublon trouvé 🎉", "没有发现重复文件 🎉", "重複は見つかりませんでした 🎉");
+        a("dup_none", "No duplicates found", "Дубликатов нет", "No se encontraron duplicados", "فایل تکراری پیدا نشد");
+        b("dup_none", "Keine Duplikate gefunden", "Aucun doublon trouvé", "没有发现重复文件", "重複は見つかりませんでした");
         a("dup_summary", "%d groups · %d extra copies · %s can be freed", "Групп: %d · лишних копий: %d · можно освободить %s", "%d grupos · %d copias extra · se pueden liberar %s", "%d گروه · %d نسخه اضافی · %s قابل آزادسازی");
         b("dup_summary", "%d Gruppen · %d überzählige Kopien · %s freigebbar", "%d groupes · %d copies en trop · %s à libérer", "%d 组 · %d 个多余副本 · 可释放 %s", "%d グループ · 余分なコピー %d 件 · %s 解放できます");
         a("dup_trash_all", "Trash all extra copies", "Убрать все лишние копии в корзину", "Enviar todas las copias extra a la papelera", "انتقال همه نسخه‌های اضافی به سطل زباله");
@@ -565,8 +565,8 @@ final class Strings {
         b("quick_tags", "Schnell-Tags", "Tags rapides", "快捷标签", "クイックタグ");
         a("quick_custom", "＋ Custom tag", "＋ Свой тег", "＋ Etiqueta propia", "＋ برچسب دلخواه");
         b("quick_custom", "＋ Eigener Tag", "＋ Tag perso", "＋ 自定义标签", "＋ 独自タグ");
-        a("quick_auto", "🤖 Auto", "🤖 Авто", "🤖 Auto", "🤖 خودکار");
-        b("quick_auto", "🤖 Auto", "🤖 Auto", "🤖 自动", "🤖 自動");
+        a("quick_auto", "Auto", "Авто", "Auto", "خودکار");
+        b("quick_auto", "Auto", "Auto", "自动", "自動");
         a("speed", "Speed", "Скорость", "Velocidad", "سرعت");
         b("speed", "Tempo", "Vitesse", "速度", "速度");
         a("feed_tags_sw", "Show tags in feed", "Показывать теги в ленте", "Mostrar etiquetas en el feed", "نمایش برچسب‌ها در فید");
@@ -621,8 +621,8 @@ final class Strings {
         b("int_title", "Integritätsprüfung", "Vérification d'intégrité", "完整性检查", "整合性チェック");
         a("int_scanning", "Checking %d / %d", "Проверка %d / %d", "Comprobando %d / %d", "بررسی %d / %d");
         b("int_scanning", "Prüfe %d / %d", "Vérification %d / %d", "检查中 %d / %d", "確認中 %d / %d");
-        a("int_ok", "✓ All files are intact", "✓ Все файлы целы", "✓ Todos los archivos están intactos", "✓ همه فایل‌ها سالم‌اند");
-        b("int_ok", "✓ Alle Dateien sind intakt", "✓ Tous les fichiers sont intacts", "✓ 所有文件完好", "✓ すべてのファイルは正常です");
+        a("int_ok", "All files are intact", "Все файлы целы", "Todos los archivos están intactos", "همه فایل‌ها سالم‌اند");
+        b("int_ok", "Alle Dateien sind intakt", "Tous les fichiers sont intacts", "所有文件完好", "すべてのファイルは正常です");
         a("int_summary", "Checked: %d · problems: %d · fingerprints recorded: %d", "Проверено: %d · проблем: %d · записано отпечатков: %d", "Comprobados: %d · problemas: %d · huellas: %d", "بررسی‌شده: %d · مشکل: %d · اثرانگشت: %d");
         b("int_summary", "Geprüft: %d · Probleme: %d · Prüfsummen: %d", "Vérifiés : %d · problèmes : %d · empreintes : %d", "已检查：%d · 问题：%d · 新记录指纹：%d", "確認: %d · 問題: %d · 記録: %d");
         a("int_r_missing", "File is missing", "Файл отсутствует", "Falta el archivo", "فایل وجود ندارد");
@@ -667,5 +667,21 @@ final class Strings {
         b("hero_add", "Fotos & Videos hinzufügen", "Ajouter photos et vidéos", "添加照片和视频", "写真と動画を追加");
         a("hero_add_sub", "Everything stays on this phone only", "Всё хранится только на этом телефоне", "Todo se queda solo en este teléfono", "همه‌چیز فقط روی همین گوشی می‌ماند");
         b("hero_add_sub", "Alles bleibt nur auf diesem Handy", "Tout reste uniquement sur ce téléphone", "所有内容仅保存在本机", "すべてこの端末内にのみ保存");
+        a("v_info", "Details", "Сведения", "Detalles", "جزئیات");
+        b("v_info", "Details", "Détails", "详情", "詳細");
+        a("v_rotate", "Rotate", "Повернуть", "Girar", "چرخش");
+        b("v_rotate", "Drehen", "Pivoter", "旋转", "回転");
+        a("v_of", "%d of %d", "%d из %d", "%d de %d", "%d از %d");
+        b("v_of", "%d von %d", "%d sur %d", "第 %d / %d", "%d / %d");
+        a("v_encrypted", "This file is encrypted", "Файл зашифрован", "Archivo cifrado", "این فایل رمزگذاری شده است");
+        b("v_encrypted", "Datei ist verschlüsselt", "Fichier chiffré", "文件已加密", "暗号化されたファイル");
+        a("v_no_album", "Not in any album", "Не в альбоме", "En ningún álbum", "در هیچ آلبومی نیست");
+        b("v_no_album", "In keinem Album", "Dans aucun album", "不在任何相册中", "アルバムなし");
+        a("v_pages", "%d pages", "%d стр.", "%d págs.", "%d صفحه");
+        b("v_pages", "%d Seiten", "%d pages", "%d 页", "%d ページ");
+        a("font_title", "Font", "Шрифт", "Fuente", "فونت");
+        b("font_title", "Schrift", "Police", "字体", "フォント");
+        a("font_system", "System", "Системный", "Sistema", "سیستم");
+        b("font_system", "System", "Système", "系统", "システム");
     }
 }

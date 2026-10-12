@@ -29,6 +29,7 @@ final class Library {
     static class Item {
         String id = "", name = "", file = "", tags = "", album = "", path = "";
         long added, trashedAt, size;
+        int rot;   // поворот для показа: 0, 90, 180, 270
         boolean trashed, fav, enc;
         String sha = "";
     }
@@ -241,6 +242,7 @@ final class Library {
                     it.enc = j.optBoolean("enc", false);
                     it.sha = j.optString("sha", "");
                     it.size = j.optLong("size", 0);
+                    it.rot = j.optInt("rot", 0);
                     bind(it);
                     items.add(it);
                 }
@@ -327,6 +329,7 @@ final class Library {
                 if (it.enc) j.put("enc", true);
                 if (!it.sha.isEmpty()) j.put("sha", it.sha);
                 if (it.size > 0) j.put("size", it.size);
+                if (it.rot != 0) j.put("rot", it.rot);
                 ia.put(j);
             }
             o.put("items", ia);
