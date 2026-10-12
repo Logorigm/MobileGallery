@@ -16,8 +16,8 @@ android {
         applicationId 'com.example.offlinemediavault'
         minSdk 23
         targetSdk 35
-        versionCode 13
-        versionName '2.2'
+        versionCode 14
+        versionName '3.0'
     }
     buildTypes {
         release {
@@ -34,6 +34,7 @@ android {
     }
 }
 dependencies {
+    implementation 'androidx.recyclerview:recyclerview:1.2.1'
     implementation 'com.google.mlkit:image-labeling:17.0.9'
     implementation 'com.google.mlkit:face-detection:16.1.7'
     implementation 'com.google.android.gms:play-services-tasks:18.2.0'

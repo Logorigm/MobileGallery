@@ -29,6 +29,8 @@ final class Library {
     static class Item {
         String id = "", name = "", file = "", tags = "", album = "", path = "";
         long added, trashedAt, size;
+        long dur;   // длительность видео, мс (кэш, чтобы не открывать файл ради подписи)
+        int pages;  // страниц в PDF (кэш)
         int rot;   // поворот для показа: 0, 90, 180, 270
         boolean trashed, fav, enc;
         String sha = "";
@@ -81,7 +83,7 @@ final class Library {
         final LinkedHashMap<String, String> albumNames = new LinkedHashMap<>();
     }
 
-    final File mediaDir, dataFile, bakFile;
+    final File mediaDir, dataFile, bakFile, thumbDir;
     final ArrayList<Item> items = new ArrayList<>();
     final ArrayList<Album> albums = new ArrayList<>();
     private long lastStamp = 0;
@@ -92,6 +94,17 @@ final class Library {
         mediaDir.mkdirs();
         dataFile = new File(filesDir, "library.json");
         bakFile = new File(filesDir, "library.json.bak");
+        thumbDir = new File(filesDir, "thumbs");
+    }
+
+    // Миниатюры на диске: .jpg для обычных файлов, .t (зашифрованная) для защищённых
+    File thumbPlain(Item it) { thumbDir.mkdirs(); return new File(thumbDir, it.id + ".jpg"); }
+
+    File thumbEnc(Item it) { thumbDir.mkdirs(); return new File(thumbDir, it.id + ".t"); }
+
+    void dropThumbs(Item it) {
+        new File(thumbDir, it.id + ".jpg").delete();
+        new File(thumbDir, it.id + ".t").delete();
     }
 
     // ---------- типы файлов ----------
@@ -243,6 +256,8 @@ final class Library {
                     it.sha = j.optString("sha", "");
                     it.size = j.optLong("size", 0);
                     it.rot = j.optInt("rot", 0);
+                    it.dur = j.optLong("dur", 0);
+                    it.pages = j.optInt("pages", 0);
                     bind(it);
                     items.add(it);
                 }
@@ -330,6 +345,8 @@ final class Library {
                 if (!it.sha.isEmpty()) j.put("sha", it.sha);
                 if (it.size > 0) j.put("size", it.size);
                 if (it.rot != 0) j.put("rot", it.rot);
+                if (it.dur > 0) j.put("dur", it.dur);
+                if (it.pages > 0) j.put("pages", it.pages);
                 ia.put(j);
             }
             o.put("items", ia);
@@ -454,6 +471,7 @@ final class Library {
 
     synchronized String deleteForever(Item it) {
         new File(it.path).delete();
+        dropThumbs(it);
         items.remove(it);
         return it.path;
     }
@@ -513,6 +531,8 @@ final class Library {
     synchronized void wipeAll() {
         File[] fs = mediaDir.listFiles();
         if (fs != null) for (File f : fs) f.delete();
+        File[] ts = thumbDir.listFiles();
+        if (ts != null) for (File f : ts) f.delete();
         items.clear();
         albums.clear();
         save();

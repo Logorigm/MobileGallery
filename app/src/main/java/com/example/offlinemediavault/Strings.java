@@ -684,4 +684,18 @@ final class Strings {
         a("font_system", "System", "Системный", "Sistema", "سیستم");
         b("font_system", "System", "Système", "系统", "システム");
     }
+
+    // ---------- v3.0 ----------
+    static { v3(); }
+
+    private static void v3() {
+        a("today", "Today", "Сегодня", "Hoy", "امروز");
+        b("today", "Heute", "Aujourd'hui", "今天", "今日");
+        a("yesterday", "Yesterday", "Вчера", "Ayer", "دیروز");
+        b("yesterday", "Gestern", "Hier", "昨天", "昨日");
+        a("day_heads_sw", "Group by day", "Группировать по дням", "Agrupar por día", "گروه‌بندی بر اساس روز");
+        b("day_heads_sw", "Nach Tagen gruppieren", "Grouper par jour", "按天分组", "日付でまとめる");
+        a("pinch_hint", "Tip: pinch the grid to change tile size, long-press and drag to select many", "Совет: сведите или разведите пальцы, чтобы изменить размер плиток; зажмите и протяните — выделите сразу много", "Consejo: pellizca la cuadrícula para cambiar el tamaño; mantén pulsado y arrastra para seleccionar varios", "نکته: با دو انگشت اندازه کاشی‌ها را تغییر دهید؛ لمس طولانی و کشیدن برای انتخاب چندتایی");
+        b("pinch_hint", "Tipp: Mit zwei Fingern die Kachelgröße ändern; lange drücken und ziehen, um viele auszuwählen", "Astuce : pincez pour changer la taille des vignettes ; appui long puis glisser pour en sélectionner plusieurs", "提示：双指缩放可调整缩略图大小；长按并拖动可批量选择", "ヒント：ピンチでタイルの大きさを変更、長押ししてなぞると複数選択できます");
+    }
 }
