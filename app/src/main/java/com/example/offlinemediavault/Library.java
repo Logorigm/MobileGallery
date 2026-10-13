@@ -217,7 +217,10 @@ final class Library {
         it.path = f.getAbsolutePath();
         // самовосстановление: ориентируемся на сам файл, если запись и файл разошлись (сбой посреди шифрования)
         boolean magic = Crypto.hasMagic(f);
-        if (magic != it.enc && f.exists()) it.enc = magic;
+        if (magic != it.enc && f.exists()) {
+            it.enc = magic;
+            if (magic) new File(thumbDir, it.id + ".jpg").delete();   // после сбоя посреди шифрования
+        }
     }
 
     // ---------- загрузка / сохранение ----------

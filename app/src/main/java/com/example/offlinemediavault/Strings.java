@@ -945,4 +945,15 @@ final class Strings {
         a("wn_themes_d", "Platinum, black gold, rose gold, emerald, sapphire… with metallic buttons and engraved headlines", "Платина, чёрное золото, розовое золото, изумруд, сапфир… с металлическими кнопками и «гравированными» заголовками", "Platino, oro negro, oro rosa, esmeralda, zafiro… con botones metálicos y títulos grabados", "پلاتین، طلای سیاه، رزگلد، زمرد، یاقوت… با دکمه‌های فلزی و عنوان‌های حکاکی‌شده");
         b("wn_themes_d", "Platin, Schwarzgold, Roségold, Smaragd, Saphir … mit Metall-Buttons und gravierten Überschriften", "Platine, or noir, or rose, émeraude, saphir… boutons métalliques et titres gravés", "铂金、黑金、玫瑰金、祖母绿、蓝宝石……金属质感按钮与镌刻标题", "プラチナ、ブラックゴールド、ローズゴールド、エメラルド、サファイア… メタリックなボタンと刻印風の見出し");
     }
+
+    static { v31b(); }
+
+    private static void v31b() {
+        a("decoy_len", "With instant PIN check on, the decoy PIN must have the same length as the main PIN", "При автопроверке PIN запасной PIN должен быть той же длины, что и основной", "Con la comprobación automática, el PIN señuelo debe tener la misma longitud que el principal", "با بررسی خودکار، PIN جعلی باید هم‌طول PIN اصلی باشد");
+        b("decoy_len", "Bei Sofortprüfung muss die Tarn-PIN genauso lang sein wie die Haupt-PIN", "Avec la vérification instantanée, le code leurre doit avoir la même longueur que le code principal", "开启即时验证时，伪装 PIN 必须与主 PIN 位数相同", "即時チェックがオンのとき、ダミー PIN はメイン PIN と同じ桁数にしてください");
+        a("pin_auto_sw", "Check PIN as you type", "Проверять PIN без кнопки ✓", "Comprobar el PIN al escribir", "بررسی PIN هنگام تایپ");
+        b("pin_auto_sw", "PIN beim Tippen prüfen", "Vérifier le code pendant la saisie", "输入时即验证 PIN", "入力と同時に PIN を確認");
+        a("pin_auto_note", "Unlocks as soon as the last digit is typed. Wrong attempts still count toward the 30-second block.", "Открывает сразу после последней цифры. Неверные попытки по-прежнему считаются для блокировки на 30 секунд.", "Desbloquea al escribir el último dígito. Los intentos fallidos siguen contando para el bloqueo de 30 s.", "با واردکردن آخرین رقم باز می‌شود. تلاش‌های نادرست همچنان برای قفل ۳۰ ثانیه‌ای شمرده می‌شوند.");
+        b("pin_auto_note", "Entsperrt nach der letzten Ziffer. Fehlversuche zählen weiter für die 30-Sekunden-Sperre.", "Déverrouille dès le dernier chiffre. Les erreurs comptent toujours pour le blocage de 30 s.", "输入最后一位即解锁。错误尝试仍计入 30 秒锁定。", "最後の数字で解除。誤入力は引き続き30秒ロックの対象です。");
+    }
 }

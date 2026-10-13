@@ -15,7 +15,8 @@
         android:label="Offline Media Vault"
         android:theme="@android:style/Theme.Material.NoActionBar"
         android:usesCleartextTraffic="false">
-        <activity android:name=".MainActivity" android:exported="true">
+        <!-- singleTask: одно окно хранилища; «Поделиться» и ярлыки приходят в него через onNewIntent -->
+        <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTask">
             <!-- «Поделиться» → Offline Media Vault из галереи, браузера, мессенджеров -->
             <intent-filter android:label="@string/share_label">
                 <action android:name="android.intent.action.SEND" />
